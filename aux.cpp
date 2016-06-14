@@ -1,7 +1,9 @@
 #include "itensor/all.h"
 #include "itensor/mps/mpo.h"
+#include "davidson2.h"
 #include <cmath>
 #include <vector>
+#include <time.h>
 
 using namespace itensor;
 using std::vector;
@@ -59,67 +61,57 @@ MPO& MPOadd(MPO & L, MPO const& R, Args const& args) {
     return L;
     }
 
-MPO dag(const MPO& mpo) {
-    int N = mpo.N();
-    auto dmpo = mpo;
-    for(int i = 1 ; i <= N ; ++i)
-        dmpo.Anc(i) = dag(dmpo.A(i));
-    return dmpo;
+ITensor Apply(const ITensor a , const ITensor b) {
+    auto ret = a;
+    ret *= prime(b,Site);
+    ret.mapprime(2,1,Site);
+    return ret;
     }
 
 double MPOnorm(const MPO& mpo) {
+    const SiteSet& hs = mpo.sites();
     int N = mpo.N();
-    auto dmpo = dag(mpo);
-    ITensor result = mpo.A(1)*dmpo.A(1);
-    for(int i = 2 ; i <= N ; ++i)
-        result *= mpo.A(i)*dmpo.A(i);
-    return sqrt((double)result.real());
+    double result = 0.0;
+    for(int i = 1 ; i <= N ; ++i) {
+        auto sym = mpo.A(i);
+        ITensor site(hs.si(i));
+        randomize(site);
+        sym = Apply(sym,dag(sym));
+        result += sqrt(-1.0*davidson2(-1.0*sym,site));
+        }
+    
+    return result;
     }
 
-MPO ExactH(const SiteSet& hs) {
+MPO ExactH(const SiteSet& hs , double offset) {
     int N = hs.N();
     AutoMPO ampo(hs);
     for(int i = 1; i <= N ; ++i) {
         if(i != N) ampo += 0.25,"Sz",i,"Sz",i+1;
         ampo += "Sx",i;
         }
+    ampo += offset,"Id",1;
 
     return MPO(ampo);
     }
 
-vector<ITensor> TwoSiteH(const SiteSet& hs) {
+vector<ITensor> TwoSiteH(const SiteSet& hs , double offset) {
     int N = hs.N();
     auto H = vector<ITensor>(N-1);
     for(int i = 1 ; i <= N-1 ; ++i) {
         H.at(i-1) = 0.25*ITensor(hs.op("Sz",i)*hs.op("Sz",i+1));
-        H.at(i-1) += (i==1 ? 1.0:0.5)*ITensor(hs.op("Sx",i))*ITensor(hs.op("Id",i+1));
-        H.at(i-1) += (i==N-1 ? 1.0:0.5)*ITensor(hs.op("Id",i))*ITensor(hs.op("Sx",i+1));
+        if(i % 2 != 0) {
+            H.at(i-1) += ITensor(hs.op("Sx",i))*ITensor(hs.op("Id",i+1));
+            H.at(i-1) += ITensor(hs.op("Id",i))*ITensor(hs.op("Sx",i+1));
+            }
         }
+    H.at(0) += offset*ITensor(hs.op("Id",1)*hs.op("Id",2));
+    if(N % 2 != 0) H.at(N-2) += ITensor(hs.op("Id",N-1))*ITensor(hs.op("Sx",N));
     return H;
     }
 
-ITensor Apply(ITensor a , const ITensor b) {
-    a *= prime(b);
-    a.mapprime(2,1,Site);
-    a /= norm(a);
-    return a;
-    }
-/*
-void MPO_SVD(MPO& mpo , int i , ITensor a , Direction dir , Real d) {
-    auto U = mpo.A(i);
-    ITensor D,V;
-    svd(a,U,D,V,{"Cutoff",d});
-    mpo.Anc(i) = U;
-    mpo.Anc(i+1) = V;
-    dir == Fromleft ? mpo.Anc(i+1) = D*mpo.A(i+1) : mpo.Anc(i) = mpo.A(i)*D;
-
-    return;
-    }
-*/
 // TEBD way to get MPO exp(-bH), kinda sucks because H is hardcoded
-// This apparently returns a bad construction of the exponential!
-// TODO: take MPO H as argument (AutoMPO)?, pass to TwoSiteH which extracts
-void TrotterExp(MPO& eH , double t , int Nt , Real eps) {
+void TrotterExp(MPO& eH , double t , int Nt , double ej , Real eps) {
     const SiteSet& hs = eH.sites();
     vector<ITensor>::const_iterator g;
     vector<ITensor> eH_evn , eH_odd;
@@ -127,41 +119,32 @@ void TrotterExp(MPO& eH , double t , int Nt , Real eps) {
     Real tstep = 1.0/(2.0*t*(double)Nt);
     eH_evn.reserve(N/2);
     eH_odd.reserve(N/2);
-    auto H2 = TwoSiteH(hs);
+    auto H2 = TwoSiteH(hs,ej);
     int i,n;
 
     // go halfway, then square
     auto eH2 = eH;
 
-    for(i = 1 ; i < N ; ++i)
+    for(i = 1 ; i < N ; ++i) {
         if(i % 2 == 0)  eH_evn.push_back(expHermitian(-tstep*H2.at(i-1)));
-        else            eH_odd.push_back(expHermitian(-tstep/2.0*H2.at(i-1)));
+        else            eH_odd.push_back(expHermitian(-tstep*H2.at(i-1)));
+        }
 
     for(n = 0 ; n < Nt ; ++n) {
         for(g = eH_odd.cbegin() , i = 1 ; g != eH_odd.cend() ; ++g , i+=2) {
             eH2.position(i);
-            auto site = eH2.A(i)*eH2.A(i+1);
-            site = Apply(site,*g);
+            auto site = Apply(eH2.A(i)*eH2.A(i+1),*g);
             eH2.svdBond(i,site,Fromleft,{"Cutoff",eps});
             }
         
         for(g = eH_evn.cbegin() , i = 2 ; g != eH_evn.cend() ; ++g , i+=2) {
             eH2.position(i);
-            auto site = eH2.A(i)*eH2.A(i+1);
-            site = Apply(site,*g);
-            eH2.svdBond(i,site,Fromleft,{"Cutoff",eps});
-            }
-        
-        for(g = eH_odd.cbegin() , i = 1 ; g != eH_odd.cend() ; ++g , i+=2) {
-            eH2.position(i);
-            auto site = eH2.A(i)*eH2.A(i+1);
-            site = Apply(site,*g);
+            auto site = Apply(eH2.A(i)*eH2.A(i+1),*g);
             eH2.svdBond(i,site,Fromleft,{"Cutoff",eps});
             }
         }
     
     nmultMPO(eH2,eH2,eH,{"Cutoff",eps});
-    
     return;
     }
 
@@ -174,7 +157,7 @@ double ApproxH(const MPO& eH , MPO& Ha , double ej , double t , Real eps) {
     //Ha.plusEq(E,{"Cutoff",eps});
     MPOadd(Ha,E,{"Cutoff",eps});
     
-    return MPOnorm(Ha);
+    return (ej+t+1.0)*2.0;
     }
 
 void ShiftH(MPO& H , double normH , double eta1) {
@@ -211,16 +194,15 @@ void NormalizedCheby(const MPO& H , MPO& K , int k , double eta0 , double eta1 ,
         Pnm2 = Pnm1;
         Pnm1 = Pn;
          
-        nmultMPO(H,2.0*Pm1,K,{"Cutoff",eps,"Maxm",500});
+        nmultMPO(H,2.0*Pm1,K,{"Cutoff",eps});
         K.orthogonalize();
         Pm2 *= -1.0;
         Pm2.orthogonalize();
-        MPOadd(K,Pm2,{"Cutoff",eps,"Maxm",500});
+        MPOadd(K,Pm2,{"Cutoff",eps});
         Pm2 = Pm1;
-        Pm1 = K;
-        
-        K /= Pn;
+        Pm1 = K; 
         } 
     
+    K /= Pn;
     return;
     }

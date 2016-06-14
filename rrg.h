@@ -23,13 +23,13 @@ MPO dag(const MPO& mpo);
 
 double MPOnorm(const MPO& mpo);
 
-MPO ExactH(const SiteSet& hs);
+MPO ExactH(const SiteSet& hs , double offset);
 
 vector<ITensor> TwoSiteH(const SiteSet& hs);
 
 ITensor Apply(ITensor a , const ITensor b);
 
-void TrotterExp(MPO& eH , double tstep , int Nt , Real eps);
+void TrotterExp(MPO& eH , double tstep , int Nt , double ej , Real eps);
 
 double ApproxH(const MPO& eH , MPO& Ha , double ej , double t , Real eps);
 
