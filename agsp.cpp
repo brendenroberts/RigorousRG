@@ -12,7 +12,7 @@ int main(int argc, char *argv[]) {
     const int Nt = 50;
     const int k = atoi(argv[2]);
     const int ED_MAX = 16;
-    vector<ITensor> evecs,evecsA;
+    vector<MPS> evecs,evecsA;
     vector<Real> evals,evalsA;
     Real eps = 1E-12;
     int i,j;
@@ -23,7 +23,7 @@ int main(int argc, char *argv[]) {
     double  ej = 0.25*sqrt(t)*N;
     double  eta0 = ej+t;
     double  eta1 = eta0+2.0*t;
-    fprintf(stderr,"l=%d , t=%5f , ej=%5f , eta0=%5f , eta1=%5f\n",l,t,ej,eta0,eta1);
+    //fprintf(stderr,"l=%d , t=%5f , ej=%5f , eta0=%5f , eta1=%5f\n",l,t,ej,eta0,eta1);
 
     // make H as an MPO
     const auto hilbert_space = SpinHalf(N);
@@ -33,25 +33,18 @@ int main(int argc, char *argv[]) {
     auto Hn = MPOnorm(H);
     H = ExactH(hilbert_space,Hn/2.0);
     
-    // exactly diagonalize H for AGSP validation later
-    if(N <= ED_MAX) { 
-        auto init_state = InitState(hilbert_space,"Up");
-        auto P = MPS(init_state);
+    // use DMRG to get H gs,1e for AGSP validation later
+    evecs.push_back(MPS(hilbert_space));
+    evecs.push_back(MPS(hilbert_space));
+    evals = dmrgThatStuff(H,evecs,eps);
+    double gap = evals[1] - evals[0];
+    fprintf(stderr,"exact GS: E=%7f , gap=%7f\n",evals[0],gap);
 
-        auto tensorP = P.A(1);
-        auto tensorH = H.A(1);
-        for(i = 2 ; i <= N ; ++i) {
-            tensorP *= P.A(i);
-            tensorH *= H.A(i);
-            }
-        
-        for(i = 0 ; i < 2 ; ++i) {
-            randomize(tensorP);
-            evecs.push_back(tensorP);
-            }
-        evals = davidson2(tensorH,evecs);
-        fprintf(stderr,"exact GS: E=%7f , gap=%7f\n",evals[0],evals[1]-evals[0]);
-        }
+    // cheat for demonstration's sake
+    ej = evals[0]-1.0;
+    eta0 = evals[0]+0.1*gap;
+    eta1 = evals[0]+0.9*gap;
+    fprintf(stderr,"l=%d , t=%5f , ej=%5f , eta0=%5f , eta1=%5f\n",l,t,ej,eta0,eta1);
    
     // make exp(-H/t) as an MPO
     MPO eH(hilbert_space);
@@ -63,15 +56,15 @@ int main(int argc, char *argv[]) {
     MPO Ha(hilbert_space);
     auto normHa = ApproxH(eH,Ha,ej,t,eps);
     fprintf(stderr,"norm(exact)=%f, norm(approx)=%f (%E)\n",Hn,normHa,normHa/MPOnorm(H));
-    
-    if(N <= ED_MAX) {
-        auto tensorHa = Ha.A(1);
-        for(i = 2 ; i <= N ; ++i) tensorHa *= Ha.A(i);
-        double g0 = (dag(prime(evecs[0]))*tensorHa*evecs[0]).real();
-        double g1 = (dag(prime(evecs[1]))*tensorHa*evecs[1]).real();
-        fprintf(stderr,"(approx H) exact GS E=%7f , exact 1e E=%7f\n",g0,g1);
-        }
-    
+
+    evecsA.push_back(MPS(hilbert_space));
+    evecsA.push_back(MPS(hilbert_space));
+    evalsA = dmrgThatStuff(Ha,evecsA,eps);
+    double gapA = evalsA[1] - evalsA[0];
+    fprintf(stderr,"approx GS: E=%7f , gap=%7f\n",evalsA[0],gapA);
+
+    fprintf(stderr,"Approx/exact GS fidelity: %f\n",fabs(overlap(evecs[0],evecsA[0])));
+
     // make shifted H for argument to initial Chebyshev polynomials
     auto Harg = Ha;
     ShiftH(Harg,normHa,eta1);
@@ -80,15 +73,10 @@ int main(int argc, char *argv[]) {
     MPO K(hilbert_space);
     NormalizedCheby(Harg,K,k,eta0,eta1,normHa,eps);
 
-    // validate K by diagonalizing, test with H ground state
-    if(N <= ED_MAX) { 
-        auto tensorK = K.A(1);
-        for(i = 2 ; i <= N ; ++i) tensorK *= K.A(i);
-
-        auto l = (dag(prime(evecs[0]))*tensorK*evecs[0]).real();
-        auto o = (dag(prime(evecs[1]))*tensorK*evecs[1]).real();
-        fprintf(stderr,"Eigenvalues of K... gs: %7f , 1e: %7f (ratio %E)\n",l,o,o/l);
-        }
+    // validate K by DMRG
+    double K0 = overlap(evecs[0],K,evecs[0]);
+    double K1 = overlap(evecs[1],K,evecs[1]);
+    fprintf(stderr,"Marix elements of K of gs=%7f , 1e=%7f (ratio %E)\n",K0,K1,K1/K0);
     
     return 0;
     }

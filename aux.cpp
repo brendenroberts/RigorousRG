@@ -2,6 +2,8 @@
 #include "itensor/mps/mpo.h"
 #include "davidson2.h"
 #include <cmath>
+#include <sstream>
+#include <iostream>
 #include <vector>
 #include <time.h>
 
@@ -59,6 +61,31 @@ MPO& MPOadd(MPO & L, MPO const& R, Args const& args) {
     L.orthogonalize(args);
 
     return L;
+    }
+
+vector<Real> dmrgThatStuff(const MPO& H , vector<MPS>& states , double eps) {
+    vector<Real> evals;
+    vector<MPS> excl;
+    for(auto psi = states.begin() ; psi != states.end() ; ++psi) {
+        auto swp = Sweeps(20);
+        auto pst = *psi;
+        swp.maxm() = 10,20,100,100,500;
+        swp.cutoff() = eps;
+        swp.niter() = 2;
+        swp.noise() = 1E-7,1E-8,0.0;
+ 
+        // dmrg call won't shut up about its parameters
+        std::stringstream ss;
+        auto out = std::cout.rdbuf(ss.rdbuf()); 
+        auto e = dmrg(pst,H,states,swp,{"Quiet",true,"PrintEigs",false});
+        std::cout.rdbuf(out);
+
+        *psi = pst;
+        excl.push_back(pst);
+        evals.push_back(e);
+        }
+
+    return evals;
     }
 
 ITensor Apply(const ITensor a , const ITensor b) {
@@ -202,7 +229,6 @@ void NormalizedCheby(const MPO& H , MPO& K , int k , double eta0 , double eta1 ,
         Pm2 = Pm1;
         Pm1 = K; 
         } 
-    
-    K /= Pn;
+    K *= 1.0/Pn;
     return;
     }

@@ -23,6 +23,8 @@ MPO dag(const MPO& mpo);
 
 double MPOnorm(const MPO& mpo);
 
+vector<Real> dmrgThatStuff(const MPO& H , vector<MPS>& states , double eps); 
+
 MPO ExactH(const SiteSet& hs , double offset);
 
 vector<ITensor> TwoSiteH(const SiteSet& hs);
