@@ -11,30 +11,26 @@ using std::vector;
 // tions in itensor/mps/mpsalgs.cc as plussers and
 // addAssumeOrth, which I reproduce locally here...
 // for some reason only this makes the code work
-void plussers(Index const& l1, 
-         Index const& l2, 
-         Index      & sumind, 
-         ITensor    & first, 
-         ITensor    & second);
+void plussers(Index const&, Index const&, Index &, ITensor &, ITensor &);
 
-MPO& MPOadd(MPO & L, MPO const& R, Args const& args);
+MPO& MPOadd(MPO &, MPO const&, Args const& args);
 
-MPO dag(const MPO& mpo);
+MPO dag(const MPO&);
 
-double MPOnorm(const MPO& mpo);
+double MPOnorm(const MPO&);
 
-vector<Real> dmrgThatStuff(const MPO& H , vector<MPS>& states , double eps); 
+vector<Real> dmrgThatStuff(const MPO&, vector<MPS>&, double, double); 
 
-MPO ExactH(const SiteSet& hs , double offset);
+MPO ExactH(const SiteSet&, double);
 
-vector<ITensor> TwoSiteH(const SiteSet& hs);
+vector<ITensor> TwoSiteH(const SiteSet&);
 
-ITensor Apply(ITensor a , const ITensor b);
+ITensor Apply(ITensor, const ITensor);
 
-void TrotterExp(MPO& eH , double tstep , int Nt , double ej , Real eps);
+void TrotterExp(MPO&, double, int, double, Real);
 
-double ApproxH(const MPO& eH , MPO& Ha , double ej , double t , Real eps);
+double ApproxH(const MPO&, MPO&, double, double, Real);
 
-void ShiftH(MPO& H , double normH , double eta1);
+void ShiftH(MPO&, double, double);
 
-void NormalizedCheby(const MPO& H , MPO& K , int k , double eta0 , double eta1 , double normH , Real eps);
+void NormalizedCheby(const MPO&, MPO&, int, double, double, double, Real);

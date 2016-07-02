@@ -63,25 +63,25 @@ MPO& MPOadd(MPO & L, MPO const& R, Args const& args) {
     return L;
     }
 
-vector<Real> dmrgThatStuff(const MPO& H , vector<MPS>& states , double eps) {
+vector<Real> dmrgThatStuff(const MPO& H , vector<MPS>& states , double penalty , double eps) {
     vector<Real> evals;
     vector<MPS> excl;
     for(auto psi = states.begin() ; psi != states.end() ; ++psi) {
         auto swp = Sweeps(20);
-        auto pst = *psi;
+        //auto pst = *psi;
         swp.maxm() = 10,20,100,100,500;
         swp.cutoff() = eps;
         swp.niter() = 2;
         swp.noise() = 1E-7,1E-8,0.0;
  
-        // dmrg call won't shut up about its parameters
+        // dmrg call won't shut up
         std::stringstream ss;
         auto out = std::cout.rdbuf(ss.rdbuf()); 
-        auto e = dmrg(pst,H,states,swp,{"Quiet",true,"PrintEigs",false});
+        auto e = dmrg(*psi,H,excl,swp,{"Quiet",true,"PrintEigs",false,"Weight",penalty});
         std::cout.rdbuf(out);
 
-        *psi = pst;
-        excl.push_back(pst);
+        //*psi = pst;
+        excl.push_back(*psi);
         evals.push_back(e);
         }
 
@@ -114,8 +114,8 @@ MPO ExactH(const SiteSet& hs , double offset) {
     int N = hs.N();
     AutoMPO ampo(hs);
     for(int i = 1; i <= N ; ++i) {
-        if(i != N) ampo += 0.25,"Sz",i,"Sz",i+1;
-        ampo += "Sx",i;
+        if(i != N) ampo += 0.5,"Sz",i,"Sz",i+1;
+        ampo += 2.0,"Sx",i;
         }
     ampo += offset,"Id",1;
 
@@ -126,19 +126,19 @@ vector<ITensor> TwoSiteH(const SiteSet& hs , double offset) {
     int N = hs.N();
     auto H = vector<ITensor>(N-1);
     for(int i = 1 ; i <= N-1 ; ++i) {
-        H.at(i-1) = 0.25*ITensor(hs.op("Sz",i)*hs.op("Sz",i+1));
+        H.at(i-1) = 0.5*ITensor(hs.op("Sz",i)*hs.op("Sz",i+1));
         if(i % 2 != 0) {
-            H.at(i-1) += ITensor(hs.op("Sx",i))*ITensor(hs.op("Id",i+1));
-            H.at(i-1) += ITensor(hs.op("Id",i))*ITensor(hs.op("Sx",i+1));
+            H.at(i-1) += 2.0*ITensor(hs.op("Sx",i))*ITensor(hs.op("Id",i+1));
+            H.at(i-1) += 2.0*ITensor(hs.op("Id",i))*ITensor(hs.op("Sx",i+1));
             }
         }
     H.at(0) += offset*ITensor(hs.op("Id",1)*hs.op("Id",2));
-    if(N % 2 != 0) H.at(N-2) += ITensor(hs.op("Id",N-1))*ITensor(hs.op("Sx",N));
+    if(N % 2 != 0) H.at(N-2) += 2.0*ITensor(hs.op("Id",N-1))*ITensor(hs.op("Sx",N));
     return H;
     }
 
 // TEBD way to get MPO exp(-bH), kinda sucks because H is hardcoded
-void TrotterExp(MPO& eH , double t , int Nt , double ej , Real eps) {
+void TrotterExp(MPO& eH , double t , int Nt , double E , Real eps) {
     const SiteSet& hs = eH.sites();
     vector<ITensor>::const_iterator g;
     vector<ITensor> eH_evn , eH_odd;
@@ -146,7 +146,7 @@ void TrotterExp(MPO& eH , double t , int Nt , double ej , Real eps) {
     Real tstep = 1.0/(2.0*t*(double)Nt);
     eH_evn.reserve(N/2);
     eH_odd.reserve(N/2);
-    auto H2 = TwoSiteH(hs,ej);
+    auto H2 = TwoSiteH(hs,E);
     int i,n;
 
     // go halfway, then square
@@ -184,7 +184,7 @@ double ApproxH(const MPO& eH , MPO& Ha , double ej , double t , Real eps) {
     //Ha.plusEq(E,{"Cutoff",eps});
     MPOadd(Ha,E,{"Cutoff",eps});
     
-    return (ej+t+1.0)*2.0;
+    return ej+t+1.0;
     }
 
 void ShiftH(MPO& H , double normH , double eta1) {
