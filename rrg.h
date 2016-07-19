@@ -7,25 +7,21 @@
 using namespace itensor;
 using std::vector;
 
-// Miles originally wrote the following two func-
-// tions in itensor/mps/mpsalgs.cc as plussers and
+// Miles originally wrote the following function
+// in itensor/mps/mpsalgs.cc as plussers and
 // addAssumeOrth, which I reproduce locally here...
 // for some reason only this makes the code work
-void plussers(Index const&, Index const&, Index &, ITensor &, ITensor &);
-
 MPO& MPOadd(MPO &, MPO const&, Args const& args);
 
 MPO dag(const MPO&);
 
-double MPOnorm(const MPO&);
+double boundMPOnorm(const MPO&);
+
+vector<Real> exactDiagonalizeMPO(const MPO&, vector<MPS>&, int, double);
 
 vector<Real> dmrgThatStuff(const MPO&, vector<MPS>&, double, double); 
 
 MPO ExactH(const SiteSet&, double);
-
-vector<ITensor> TwoSiteH(const SiteSet&);
-
-ITensor Apply(ITensor, const ITensor);
 
 void TrotterExp(MPO&, double, int, double, Real);
 
