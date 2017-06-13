@@ -37,14 +37,12 @@ void TrotterExp(MPO& eH , double t , int M , vector<SiteITensor>& terms) {
     
     eH.position(1,{"Cutoff",eps});
     eH.Aref(1) *= 1e4/norm(eH.A(1));
-    //eH.Aref(1).scaleTo(1e4);
     
     for(const auto& g : eH2odd) applyToMPO(eH,g,N);
         
     for(n = 0 ; n < M ; ++n) {
         for(const auto& g : eHevn) applyToMPO(eH,g,N);
         if(n != M-1) for(const auto& g : eHodd) applyToMPO(eH,g,N); 
-        //Print(eH.A(N).scale().real());
         }
     
     for(const auto& g : eH2odd) applyToMPO(eH,g,N);

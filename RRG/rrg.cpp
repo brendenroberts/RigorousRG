@@ -1,6 +1,4 @@
 #include "rrg.h"
-#include <lapacke.h>
-#include <random>
 #include <fstream>
 
 int main(int argc, char *argv[]) {
@@ -32,28 +30,11 @@ int main(int argc, char *argv[]) {
     const Real   J = 1.0;
     const Real   h = 0.5;
     const Real   g = -1.05;
-    //const Real   P = 0.5;
 
     // computational settings
     const int    e   = s; // number of DMRG eigenstates to compute
     const int    doI = 1; // diag restricted Hamiltonian iteratively?
     const int    doV = 1; // compute viability from DMRG gs?
-
-    // setup random sampling
-    std::random_device r;
-    int seed = (argc == 6 ? atoi(argv[5]) : r());
-    fprintf(stderr,"seed is %d\n",seed);
-    std::mt19937 gen(seed);
-    std::uniform_real_distribution<double> udist(0.0,1.0);
-
-    // random Hamiltonian parameters
-    const double J0 = 1.0;
-    const double x0 = 1.0;
-    const double x1 = 0.0;
-    const double PW  = -0.5;
-    vector<double> Js(N-1);
-    for(int i = 1 ; i < N ; ++i)
-        Js[i-1] = J0*pow((pow(x1,PW+1.0)-pow(x0,PW+1.0))*udist(gen)+pow(x0,PW+1.0),1.0/(PW+1.0));
 
     // generate Hilbert subspaces for each level m = 0,...,log(N/n)
     vector<SpinHalf> hsps;
@@ -159,7 +140,7 @@ int main(int argc, char *argv[]) {
         auto hs = hsps[m];
         if(doV) rhoGA = MPO(hs);
         Spost.clear();
-        // STEP 1: for each block, expand dimension of subspace with AGSP operators
+        // EXPAND STEP: for each block, expand dimension of subspace with AGSP operators
         for(ll = 0 ; ll < N/w ; ++ll) {
             MPO A(hs);
             MPO Hc = Hs[m][ll];
@@ -167,13 +148,13 @@ int main(int argc, char *argv[]) {
             int ss = (ll%2 ? 1 : w);
             auto pi = findtype(pre.A(ss),Select);
 
-            // STEP 1a: extract filtering operators A from AGSP K
+            // STEP 1: extract filtering operators A from AGSP K
             time(&t1);
             restrictMPO(K,A,w*ll+1,D,ll%2);
             time(&t2);
             fprintf(stderr,"truncate AGSP: %.f s\n",difftime(t2,t1));
             
-            // STEP 1b: expand subspace using the mapping A:pre->ret
+            // STEP 2: expand subspace using the mapping A:pre->ret
             time(&t1);
             MPS ret(hs);
             applyMPO(pre,A,ret,ll%2);
@@ -185,7 +166,7 @@ int main(int argc, char *argv[]) {
             // and stabilizing numerics, then store subspace in eigenbasis of block H,
             // which is necessary for the iterative solver in the Merge step
             G = overlapT(ret,ret);
-            ITensor U,Dg,P,S;
+            ITensor P,S;
             diagHermitian(G,U,Dg,{"Cutoff",1E-9});
             Dg.apply(invsqrt);
             auto Hproj = prime(Dg*U*overlapT(ret,Hs[m][ll],ret)*prime(dag(U)*Dg),-1);
@@ -207,7 +188,7 @@ int main(int argc, char *argv[]) {
             Spost.push_back(ret);
             }
 
-        // STEP 2: construct tensor subspace, sample to reduce dimension
+        // MERGE/REDUCE STEP: construct tensor subspace, sample to reduce dimension
         Spre.clear();
         for(ll = 0 ; ll < N/w ; ll+=2) {
             auto spL = Spost[ll];                // L subspace
@@ -217,34 +198,34 @@ int main(int argc, char *argv[]) {
             ITensor P;
             Index si("ext",s,Select);
 
+            // STEP 1: store restricted H in dense ITensor
             auto HL = overlapT(spL,Hs[m][ll],spL);
             auto HR = overlapT(spR,Hs[m][ll+1],spR);
-            auto H1 = HL*delta(sR,prime(sR)) + HR*delta(sL,prime(sL));
+            auto HH = HL*delta(sR,prime(sR)) + HR*delta(sL,prime(sL));
             for(auto& bb : bndterms[m][ll])
-                H1 += overlapT(spL,bb.L,spL)*overlapT(spR,bb.R,spR);
+                HH += overlapT(spL,bb.L,spL)*overlapT(spR,bb.R,spR);
             
+            // STEP 2: find s lowest eigenpairs of restricted H
             time(&t1);
             if(doI) {
                 auto C = combiner(sL,sR);
-                H1 = prime(C)*H1*C;
-                auto ci = commonIndex(H1,C);
+                HH = prime(C)*HH*C;
+                auto ci = commonIndex(HH,C);
                 fprintf(stderr,"dim H = %d\n",int(ci));
                 vector<ITensor> ret;
-                vector<Real> eigs;
                 for(int i = 0 ; i < s ; ++i) ret.push_back(randomTensor(ci));
-                eigs = davidsonT(H1,ret,{"ErrGoal",1e-10,"MaxIter",100*s});
+                auto eigs = davidsonT(HH,ret,{"ErrGoal",1e-10,"MaxIter",100*s});
                 P = ITensor(si,ci);
                 combineVectors(ret,P);
                 P *= C;
-                pvec(eigs,s);
             } else {
-                ITensor Dg;
-                auto eigs = diagHermitian(-H1,P,Dg,{"Maxm",s});
+                auto eigs = diagHermitian(-HH,P,Dg,{"Maxm",s});
                 P *= delta(commonIndex(P,Dg),si);
                 }
             time(&t2);
             fprintf(stderr,"diag restricted H: %.f s\n",difftime(t2,t1));
 
+            // STEP 3: tensor viable sets on each side and reduce dimension
             MPS ret(hsps[m+1]);
             time(&t1);
             tensorProduct(spL,spR,ret,P,(ll/2)%2);
@@ -252,7 +233,8 @@ int main(int argc, char *argv[]) {
             fprintf(stderr,"tensor product (ll=%d): %.f s\n",ll,difftime(t2,t1));
             fprintf(stderr,"max m: %d\n",maxM(ret));
             
-            if(N/w > 2) {    
+            // orthogonalize viable set for next iteration, if ON basis needed 
+            if(N/w > 2 && doV) {    
                 int ss = ((ll/2)%2 ? 1 : 2*w);
                 G = overlapT(ret,ret);
                 diagHermitian(G,U,Dg,{"Cutoff",eps});
@@ -281,7 +263,8 @@ int main(int argc, char *argv[]) {
             fprintf(stderr,"Viability: %e\n",1.0-delt*delt);
             fprintf(stdout,"%18.15e,0\n",1.0-delt*delt);
             }
-        Real eng = overlap(fc,H,fc);
+        auto eng = overlap(fc,H,fc);
+        fprintf(stderr,"%17.14f\n",eng);
         eigenstates[i-1] = fc;
         }
     fprintf(stderr,"BD ");
@@ -291,30 +274,6 @@ int main(int argc, char *argv[]) {
     time(&tF);
     fprintf(stderr,"RRG elapsed time: %.f s\n",difftime(tF,tI));
 
-/*  
-    fprintf(stdout,"# DMRG\n");
-    for(i = 1 ; i < N ; ++i) {
-        gs.position(i,{"Cutoff",eps});
-        auto SzA = hs.op("Sz",i);
-	for(j = i+1 ; j <= N ; ++j) { 
-            auto SzB = hs.op("Sz",j);
-            double ccD = twopoint(gs,SzA,SzB,i,j);
-            fprintf(stdout,"%9.6f\t",ccD);
-            }
-        fprintf(stdout,"\n");
-        }
-    fprintf(stdout,"# RRG\n");
-    for(i = 1 ; i < N ; ++i) {
-        res.position(i,{"Cutoff",eps});
-        auto SzA = hs.op("Sz",i);
-	for(j = i+1 ; j <= N ; ++j) { 
-            auto SzB = hs.op("Sz",j);
-            double ccR = twopoint(res,SzA,SzB,i,j);
-            fprintf(stdout,"%9.6f\t",ccR);
-            }
-        fprintf(stdout,"\n");
-        }
-*/
     return 0;
     }
 
