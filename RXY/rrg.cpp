@@ -1,5 +1,6 @@
 #include "rrg.h"
 #include <fstream>
+#include <random>
 
 int main(int argc, char *argv[]) {
     if(argc != 5 && argc != 6) {
@@ -26,13 +27,24 @@ int main(int argc, char *argv[]) {
     const int    s = atoi(argv[3]);  // formal s param
     const int    D = atoi(argv[4]);  // formal D param
 
-    // Hamitonian parameters
-    const Real   J = 1.0;
-    const Real   h = 0.5;
-    const Real   g = -1.05;
+    // setup random sampling
+    std::random_device r;
+    int seed = (argc == 6 ? atoi(argv[5]) : r());
+    fprintf(stderr,"seed is %d\n",seed);
+    std::mt19937 gen(seed);
+    std::uniform_real_distribution<double> udist(0.0,1.0);
+
+    // Hamiltonian parameters
+    const double J0 = 1.0;
+    const double x0 = 1.0;
+    const double x1 = 0.0;
+    const double PW  = -0.5;
+    vector<double> J(N-1);
+    for(int i = 1 ; i < N ; ++i)
+        J[i-1] = J0*pow((pow(x1,PW+1.0)-pow(x0,PW+1.0))*udist(gen)+pow(x0,PW+1.0),1.0/(PW+1.0));
 
     // computational settings
-    const int    e   = min(s,8); // number of DMRG eigenstates to compute
+    const int    e   = s; // number of DMRG eigenstates to compute
     const int    doI = 1; // diag restricted Hamiltonian iteratively?
     const int    doV = 1; // compute viability from DMRG gs?
 
@@ -53,20 +65,20 @@ int main(int argc, char *argv[]) {
         int L = it.N();
         for(int o = 0 ; o < N ; o += L) {
             AutoMPO ampo(it);
-            for(int i = 1 ; i <= L ; ++i) {
-                if(i != L) ampo += -J*4.0,"Sz",i,"Sz",i+1;
-                ampo += -h*2.0,"Sz",i;
-                ampo += -g*2.0,"Sx",i;
+            for(int i = 1 ; i < L ; ++i) {
+                ampo += J[o+i-1],"S+",i,"S-",i+1;
+                ampo += J[o+i-1],"S-",i,"S+",i+1;
                 }
             Hcur.push_back(MPO(ampo));
 
-            if(L == N) autoH = ampo; 
-
             if(o+L < N) {
-                vector<MPOPair> cur(1);
-                AutoMPO bl1(it),br1(it);
-                bl1 += -J*4.0,"Sz",L;     br1 += 1.0,"Sz",1;
+                vector<MPOPair> cur(2);
+                AutoMPO bl1(it),bl2(it);
+                AutoMPO br1(it),br2(it);
+                bl1 += J[o+L-1],"S+",L;  br1 += "S-",1;
+                bl2 += J[o+L-1],"S-",L;  br2 += "S+",1;
                 cur[0] = MPOPair(MPO(bl1),MPO(br1));
+                cur[1] = MPOPair(MPO(bl2),MPO(br2));
                 bcur.push_back(cur);
                 }
             }
@@ -207,8 +219,7 @@ int main(int argc, char *argv[]) {
             
             // STEP 2: find s lowest eigenpairs of restricted H
             time(&t1);
-            if(doI || int(sL)*int(sR) >= 10000) {
-                if(int(sL)*int(sR) >= 10000) fprintf(stderr,"tns H too large, iterative diag\n");
+            if(doI) {
                 auto C = combiner(sL,sR);
                 HH = prime(C)*HH*C;
                 auto ci = commonIndex(HH,C);

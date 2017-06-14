@@ -3,7 +3,7 @@
 
 # 2. Edit LIBRARY_DIR to point at the location of your ITensor Library
 #    source folder (this is the folder that has options.mk in it)
-LIBRARY_DIR=$(HOME)/src/ITensor
+LIBRARY_DIR=$(HOME)/ITensor
 
 # 3. If your 'main' function is in a file called 'myappname.cc', then
 #    set APP to 'myappname'. Running 'make' will compile the app.
@@ -13,13 +13,13 @@ APP=rrg
 
 # 4. Add any headers your program depends on here. The make program
 #    will auto-detect if these headers have changed and recompile your app.
-HEADERS=rrg.h
+HEADERS=../rrg.h
 
 # 5. For any additional .cc files making up your project,
 #    add their full filenames here.
-CCFILES=$(APP).cpp util.cpp trotter.cpp davidson.cpp
+CCFILES=$(APP).cpp ../util.cpp ../trotter.cpp ../davidson.cpp
 
-LDFLAGS=
+LDFLAGS= -I..
 
 #################################################################
 #################################################################
