@@ -17,7 +17,7 @@ HEADERS=../rrg.h
 
 # 5. For any additional .cc files making up your project,
 #    add their full filenames here.
-CCFILES=$(APP).cpp ../util.cpp ../trotter.cpp ../davidson.cpp
+CCFILES=$(APP).cpp ../util.cpp ../tensorProductH.cpp ../trotter.cpp ../davidson.cpp
 
 LDFLAGS= -I..
 

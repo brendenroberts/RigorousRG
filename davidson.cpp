@@ -2,7 +2,7 @@
 // Altered by Brenden Roberts to iteratively find eigenpairs of ITensors
 //
 #include "rrg.h"
-
+/*
 template <class Tensor> 
 long sizeT(Tensor const& A) {
     long size = 1;
@@ -12,19 +12,19 @@ long sizeT(Tensor const& A) {
 
     return size;
     }
-
-template <class Tensor> 
-Real davidsonT(Tensor const& A, Tensor& phi, Args const& args) {
+*/
+template <class BigMatrixT, class Tensor> 
+Real davidsonT(BigMatrixT const& A, Tensor& phi, Args const& args) {
     auto v = std::vector<Tensor>(1);
     v.front() = phi;
     auto eigs = davidsonT(A,v,args);
     phi = v.front();
     return eigs.front();
     }
-template Real davidsonT(ITensor const& , ITensor& , Args const&);
+template Real davidsonT(tensorProdH const& , ITensor& , Args const&);
 
-template <class Tensor> 
-vector<Real> davidsonT(Tensor const& A, vector<Tensor>& phi, Args const& args) {
+template <class BigMatrixT, class Tensor> 
+vector<Real> davidsonT(BigMatrixT const& A, vector<Tensor>& phi, Args const& args) {
     auto maxiter_ = args.getInt("MaxIter",100);
     auto errgoal_ = args.getReal("ErrGoal",1E-8);
     auto debug_level_ = args.getInt("DebugLevel",-1);
@@ -45,7 +45,7 @@ vector<Real> davidsonT(Tensor const& A, vector<Tensor>& phi, Args const& args) {
         phi[j] *= 1./nrm;
         }
 
-    auto maxsize = sizeT(A);
+    auto maxsize = A.size();
     auto actual_maxiter = std::min(maxiter_,static_cast<decltype(maxiter_)>(maxsize)-1);
     if(debug_level_ >= 2)
         {
@@ -56,7 +56,7 @@ vector<Real> davidsonT(Tensor const& A, vector<Tensor>& phi, Args const& args) {
     if(area(phi.front().inds()) != size_t(maxsize))
         {
         println("area(phi.front().inds()) = ",area(phi.front().inds()));
-        println("A.size() = ",sizeT(A));
+        println("A.size() = ",A.size());
         Error("davidson: size of initial vector should match linear matrix size");
         }
 
@@ -86,7 +86,8 @@ vector<Real> davidsonT(Tensor const& A, vector<Tensor>& phi, Args const& args) {
     auto eigs = std::vector<Real>(nget,NAN);
 
     V[0] = phi.front();
-    AV[0] = noprime(A*V[0]);
+    A.product(V[0],AV[0]);
+    //AV[0] = noprime(A*V[0]);
 
     auto initEn = ((dag(V[0])*AV[0]).cplx()).real();
 
@@ -297,7 +298,7 @@ vector<Real> davidsonT(Tensor const& A, vector<Tensor>& phi, Args const& args) {
         //Expand AV and M
         //for next step
         V[ni].scaleTo(1.0);
-        AV[ni] = noprime(A*V[ni]);
+        A.product(V[ni],AV[ni]);
 
         //Step H of Davidson (1975)
         //Add new row and column to M
@@ -363,4 +364,4 @@ vector<Real> davidsonT(Tensor const& A, vector<Tensor>& phi, Args const& args) {
 
     return eigs;
     }
-template vector<Real> davidsonT(ITensor const& , vector<ITensor>& , Args const&);
+template vector<Real> davidsonT(tensorProdH const& , vector<ITensor>& , Args const&);

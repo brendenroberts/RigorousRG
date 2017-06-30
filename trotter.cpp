@@ -13,7 +13,7 @@ ITensor apply(const ITensor a , const ITensor b) {
 void applyToMPO(MPO& eH , const SiteITensor& T , int N) {
     auto i = T.i;
     eH.position(i,{"Cutoff",eps});
-    if(i != N) eH.svdBond(i,apply(eH.A(i)*eH.A(i+1),T.A),Fromleft,{"Cutoff",eps});
+    if(i != N) eH.svdBond(i,apply(eH.A(i)*eH.A(i+1),T.A),Fromleft,{"Cutoff",eps*1e-1});
     else eH.Anc(i) = apply(eH.A(i),T.A);
     return;
     }
@@ -35,14 +35,15 @@ void TrotterExp(MPO& eH , double t , int M , vector<SiteITensor>& terms) {
         else eHevn.push_back(SiteITensor(i,expHermitian(-tstep*it.A)));
         } 
     
-    eH.position(1,{"Cutoff",eps});
-    eH.Aref(1) *= 1e4/norm(eH.A(1));
+    eH.position(1,{"Cutoff",eps*1e-1});
+    eH.Aref(1) *= 1e10/norm(eH.A(1));
     
     for(const auto& g : eH2odd) applyToMPO(eH,g,N);
         
     for(n = 0 ; n < M ; ++n) {
         for(const auto& g : eHevn) applyToMPO(eH,g,N);
         if(n != M-1) for(const auto& g : eHodd) applyToMPO(eH,g,N); 
+        eH.Aref(N) *= 1e10/norm(eH.A(N));
         }
     
     for(const auto& g : eH2odd) applyToMPO(eH,g,N);

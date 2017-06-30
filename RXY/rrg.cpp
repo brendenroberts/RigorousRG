@@ -21,11 +21,16 @@ int main(int argc, char *argv[]) {
     int          m  = 0;             // RG scale factor
 
     // AGSP and subspace parameters
-    const double t = 5.0;            // Trotter temperature
+    const double t = 2.0;            // Trotter temperature
     const int    M = 50;             // num Trotter steps
     const int    k = 10;             // power of Trotter op
     const int    s = atoi(argv[3]);  // formal s param
     const int    D = atoi(argv[4]);  // formal D param
+    
+    // computational settings
+    const int    e   = 1; // number of DMRG eigenstates to compute
+    const int    doI = 1; // diag restricted Hamiltonian iteratively?
+    const int    doV = 0; // compute viability from DMRG gs?
 
     // setup random sampling
     std::random_device r;
@@ -40,13 +45,10 @@ int main(int argc, char *argv[]) {
     const double x1 = 0.0;
     const double PW  = -0.5;
     vector<double> J(N-1);
-    for(int i = 1 ; i < N ; ++i)
+    for(int i = 1 ; i < N ; ++i) {
         J[i-1] = J0*pow((pow(x1,PW+1.0)-pow(x0,PW+1.0))*udist(gen)+pow(x0,PW+1.0),1.0/(PW+1.0));
-
-    // computational settings
-    const int    e   = s; // number of DMRG eigenstates to compute
-    const int    doI = 1; // diag restricted Hamiltonian iteratively?
-    const int    doV = 1; // compute viability from DMRG gs?
+        fprintf(stdout,"%.12e,\n",J[i-1]);
+        }
 
     // generate Hilbert subspaces for each level m = 0,...,log(N/n)
     vector<SpinHalf> hsps;
@@ -70,6 +72,8 @@ int main(int argc, char *argv[]) {
                 ampo += J[o+i-1],"S-",i,"S+",i+1;
                 }
             Hcur.push_back(MPO(ampo));
+
+            if(L == N) autoH = ampo;
 
             if(o+L < N) {
                 vector<MPOPair> cur(2);
@@ -209,11 +213,47 @@ int main(int argc, char *argv[]) {
             auto sR = findtype(spR.A(1),Select); // R dangling index
             ITensor P;
             Index si("ext",s,Select);
+            bool toobig = (int(sL)*int(sR) >= 15000);
 
+            // STEP 1: find s lowest eigenpairs of restricted H
+            time(&t1);
+            if(doI || toobig) {
+                if(toobig) fprintf(stderr,"H too large, iterative diag\n");
+                fprintf(stderr,"dim H = %d\n",int(sL)*int(sR));
+                auto C = combiner(sL,sR);
+                auto ci = findtype(C,Link);
+
+                vector<ITensorPair> Hp;
+                vector<ITensor> ret;
+                Hp.push_back(ITensorPair(overlapT(spL,Hs[m][ll],spL),delta(sR,prime(sR))));
+                Hp.push_back(ITensorPair(delta(sL,prime(sL)),overlapT(spR,Hs[m][ll+1],spR)));
+                for(auto& bb : bndterms[m][ll])
+                    Hp.push_back(ITensorPair(overlapT(spL,bb.L,spL),overlapT(spR,bb.R,spR)));
+                tensorProdH resH(Hp,C);
+                for(int i = 0 ; i < s ; ++i) ret.push_back(randomTensor(ci));
+
+                auto eigs = davidsonT(resH,ret,{"ErrGoal",1e-10,"MaxIter",100*s});
+                pvec(eigs,s);
+                P = ITensor(si,ci);
+                combineVectors(ret,P);
+                P *= C;
+            } else {
+                auto HL = overlapT(spL,Hs[m][ll],spL);
+                auto HR = overlapT(spR,Hs[m][ll+1],spR);
+                auto HH = HL*delta(sR,prime(sR)) + HR*delta(sL,prime(sL));
+                for(auto& bb : bndterms[m][ll])
+                    HH += overlapT(spL,bb.L,spL)*overlapT(spR,bb.R,spR);
+                auto eigs = diagHermitian(-HH,P,Dg,{"Maxm",s});
+                P *= delta(commonIndex(P,Dg),si);
+                }
+            time(&t2);
+
+/*
             // STEP 1: store restricted H in dense ITensor
             auto HL = overlapT(spL,Hs[m][ll],spL);
             auto HR = overlapT(spR,Hs[m][ll+1],spR);
             auto HH = HL*delta(sR,prime(sR)) + HR*delta(sL,prime(sL));
+            //HH += HR*delta(sL,prime(sL));
             for(auto& bb : bndterms[m][ll])
                 HH += overlapT(spL,bb.L,spL)*overlapT(spR,bb.R,spR);
             
@@ -226,7 +266,7 @@ int main(int argc, char *argv[]) {
                 fprintf(stderr,"dim H = %d\n",int(ci));
                 vector<ITensor> ret;
                 for(int i = 0 ; i < s ; ++i) ret.push_back(randomTensor(ci));
-                auto eigs = davidsonT(HH,ret,{"ErrGoal",1e-10,"MaxIter",100*s});
+                auto eigs = davidsonT(HH,ret,{"ErrGoal",max(1e-10,eps),"MaxIter",200*s});
                 P = ITensor(si,ci);
                 combineVectors(ret,P);
                 P *= C;
@@ -235,6 +275,7 @@ int main(int argc, char *argv[]) {
                 P *= delta(commonIndex(P,Dg),si);
                 }
             time(&t2);
+*/
             fprintf(stderr,"diag restricted H: %.f s\n",difftime(t2,t1));
 
             // STEP 3: tensor viable sets on each side and reduce dimension
