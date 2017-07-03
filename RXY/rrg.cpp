@@ -110,10 +110,11 @@ int main(int argc, char *argv[]) {
     // and MPO multiplication; temperature of K is k/t
     time(&tI);
     MPO eH(hs);
+    Real a = exp(evals[mn]/t);
     twoLocalTrotter(eH,t,M,autoH);
-    auto K = eH;
-    for(int i = 1 ; i < k ; ++i) nmultMPO(eH,K,K,{"Cutoff",eps});
-   
+    auto K = eH*a;
+    for(int i = 1 ; i < k ; ++i) { nmultMPO(eH*a,K,K,{"Cutoff",eps}); K.Aref(1) *= 1e10/norm(K.A(1));} 
+ 
     // INITIALIZATION: generate complete product basis over m=0 Hilbert space
     int p = (int)pow(2,n);
     vector<MPS> V1;

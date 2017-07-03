@@ -151,7 +151,7 @@ void restrictMPO(const MPO& O , MPO& res , int ls , int D, int lr) {
     const auto& hs = O.sites();
     const auto& sub = res.sites();
     auto M = O;
-    ITensor U,S,V,SB;
+    ITensor U,V,SB;
    
     if(ls == 1) { // easy case: only dangling bond already at R end
         SB = splitMPO(M,res,LEFT);
@@ -195,27 +195,26 @@ void restrictMPO(const MPO& O , MPO& res , int ls , int D, int lr) {
             auto B = res.A(i)*res.A(i+1);
             U = ITensor(sub.si(i),sub.siP(i),ri,(i == 1 ? li : leftLinkInd(res,i)));
             V = ITensor();
-            denmatDecomp(B,U,V,Fromright,{"Cutoff",eps*1e-1});
-            //svd(B,U,S,V,{"Cutoff",eps*1e-1});
-            res.Aref(i) = U;//*S;
+            denmatDecomp(B,U,V,Fromright,{"Cutoff",eps});
+            res.Aref(i) = U;
             res.Aref(i+1) = V;
             }
     else
         for(int i = 2 ; i <= n ; ++i) {
             auto B = res.A(i-1)*res.A(i);
-            V = ITensor(sub.si(i),sub.siP(i),li,(i == n ? ri : rightLinkInd(res,i)));
             U = ITensor();
-            denmatDecomp(B,U,V,Fromleft,{"Cutoff",eps*1e-1});
-            //svd(B,U,S,V,{"Cutoff",eps*1e-1});
+            V = ITensor(sub.si(i),sub.siP(i),li,(i == n ? ri : rightLinkInd(res,i)));
+            denmatDecomp(B,U,V,Fromleft,{"Cutoff",eps});
             res.Aref(i-1) = U;
-            res.Aref(i) = V;//S*V;
+            res.Aref(i) = V;
             }
     
     // combine ext indices
     U = ITensor(li,ri);
-    svd(SB,U,S,V,{"Maxm",D*D,"Cutoff",eps});
-    auto ei = Index("ext",commonIndex(U,S).m(),Select);
-    U *= delta(ei,commonIndex(U,S));
+    V = ITensor();
+    denmatDecomp(SB,U,V,Fromleft,{"Maxm",D*D,"Cutoff",eps});
+    auto ei = Index("ext",int(commonIndex(U,V)),Select);
+    U *= delta(ei,commonIndex(U,V));
     res.Aref((lr ? 1 : n)) *= U;
     regauge(res,(lr ? 1 : n));
 
