@@ -34,7 +34,7 @@ int main(int argc, char *argv[]) {
     const Real   g = -1.05;
 
     // computational settings
-    const int    e   = s; // number of DMRG eigenstates to compute
+    const int    e   = 1; // number of DMRG eigenstates to compute
     const int    doI = 1; // diag restricted Hamiltonian iteratively?
     const int    doV = 1; // compute viability from DMRG gs?
 

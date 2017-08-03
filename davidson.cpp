@@ -2,17 +2,7 @@
 // Altered by Brenden Roberts to iteratively find eigenpairs of ITensors
 //
 #include "rrg.h"
-/*
-template <class Tensor> 
-long sizeT(Tensor const& A) {
-    long size = 1;
-    for(auto& I : A.inds())
-        if(I.primeLevel() == 0)
-            size *= I.m();
 
-    return size;
-    }
-*/
 template <class BigMatrixT, class Tensor> 
 Real davidsonT(BigMatrixT const& A, Tensor& phi, Args const& args) {
     auto v = std::vector<Tensor>(1);
@@ -87,7 +77,6 @@ vector<Real> davidsonT(BigMatrixT const& A, vector<Tensor>& phi, Args const& arg
 
     V[0] = phi.front();
     A.product(V[0],AV[0]);
-    //AV[0] = noprime(A*V[0]);
 
     auto initEn = ((dag(V[0])*AV[0]).cplx()).real();
 

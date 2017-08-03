@@ -74,15 +74,15 @@ void combineVectors(const vector<ITensor>& vecs , ITensor& ret) {
 
     }
 
-vector<Real> dmrgMPO(const MPO& H , vector<MPS>& states , double penalty) {
+vector<Real> dmrgMPO(const MPO& H , vector<MPS>& states , double penalty, double err) {
     vector<Real> evals;
     vector<MPS> exclude;
-    int num_sw = 30;
+    int num_sw = 40;
     for(auto& psi : states) {
         auto swp = Sweeps(num_sw);
         num_sw = 50;
         swp.maxm() = 50,50,100,100,500;
-        swp.cutoff() = eps;
+        swp.cutoff() = err;
         swp.niter() = 3;
         swp.noise() = 1E-7,1E-8,0.0;
  
@@ -97,6 +97,10 @@ vector<Real> dmrgMPO(const MPO& H , vector<MPS>& states , double penalty) {
         }
 
     return evals;
+    }
+
+vector<Real> dmrgMPO(const MPO& H , vector<MPS>& states , double penalty) {
+    return dmrgMPO(H,states,penalty,eps);
     }
 
 ITensor svDense(const ITensor& A) {
@@ -124,7 +128,7 @@ ITensor splitMPO(const MPO& O, MPO& P, int lr) {
     int a[2] = {t-lr,t+1-lr};
     auto B = M.A(a[0])*M.A(a[1]);
     U = ITensor(HS.si(a[0]),HS.siP(a[0]),leftLinkInd(M,a[0]));
-    svd(B,U,S,V,{"Cutoff",eps*1e-1});
+    svdL(B,U,S,V,{"Cutoff",eps*1e-1});
     R = (lr ? V : U);
     ai = commonIndex(S,R);
     sp = hs.si((lr ? 1 : n)); sq = HS.si(t);
@@ -181,8 +185,8 @@ void restrictMPO(const MPO& O , MPO& res , int ls , int D, int lr) {
         SR = splitMPO(tmp,res,LEFT);
         }
     SB = SL*SR;
-    Index li = Index("ext",std::min(D+4,(int)findtype(res.A(1),Select).m()),Select);
-    Index ri = Index("ext",std::min(D+4,(int)findtype(res.A(n),Select).m()),Select);
+    Index li = Index("ext",std::min(D+5,(int)findtype(res.A(1),Select).m()),Select);
+    Index ri = Index("ext",std::min(D+5,(int)findtype(res.A(n),Select).m()),Select);
     Index li2 = commonIndex(SL,res.A(1));
     Index ri2 = commonIndex(SR,res.A(n));
     res.Aref(1) *= delta(li,li2);
@@ -190,13 +194,15 @@ void restrictMPO(const MPO& O , MPO& res , int ls , int D, int lr) {
     SB *= delta(li,li2);
     SB *= delta(ri,ri2);
 
+    ITensor S;
     if(lr)
         for(int i = n-1 ; i >= 1 ; --i) {
             auto B = res.A(i)*res.A(i+1);
             U = ITensor(sub.si(i),sub.siP(i),ri,(i == 1 ? li : leftLinkInd(res,i)));
             V = ITensor();
-            denmatDecomp(B,U,V,Fromright,{"Cutoff",eps});
-            res.Aref(i) = U;
+            //denmatDecomp(B,U,V,Fromright,{"Cutoff",eps});
+            svdL(B,U,S,V,{"Cutoff",eps});
+            res.Aref(i) = U*S;
             res.Aref(i+1) = V;
             }
     else
@@ -204,9 +210,10 @@ void restrictMPO(const MPO& O , MPO& res , int ls , int D, int lr) {
             auto B = res.A(i-1)*res.A(i);
             U = ITensor();
             V = ITensor(sub.si(i),sub.siP(i),li,(i == n ? ri : rightLinkInd(res,i)));
-            denmatDecomp(B,U,V,Fromleft,{"Cutoff",eps});
+            //denmatDecomp(B,U,V,Fromleft,{"Cutoff",eps});
+            svdL(B,U,S,V,{"Cutoff",eps});
             res.Aref(i-1) = U;
-            res.Aref(i) = V;
+            res.Aref(i) = V*S;
             }
     
     // combine ext indices
@@ -227,25 +234,23 @@ void applyMPO(const MPS& psi, const MPO& K, MPS& res , int lr) {
     auto ss = (lr ? 1 : N);
     auto st = (lr ? N : 1);
     res = psi;
-    res.primelinks(0,4);
-    res.mapprime(0,1,Site);
     vector<Index> ext;
     if(findtype(psi.A(ss),Select)) ext.push_back(findtype(psi.A(ss),Select));
     if(findtype(K.A(ss),Select)) ext.push_back(findtype(K.A(ss),Select));
 
     ITensor clust,nfork,temp,S;
-    Index oldmid;
     for(int i = 0; i < N-1; i++) {
         int x = (lr ? N-i : i+1);
         if(i == 0) { clust = psi.A(x) * K.A(x); }
         else { clust = (nfork * psi.A(x)) * K.A(x); }
         if(i == N-2) break;
 
-        oldmid = (lr ? leftLinkInd(res,x) : rightLinkInd(res,x));
-        nfork = (lr ? ITensor(leftLinkInd(psi,x),leftLinkInd(K,x),oldmid)
-                    : ITensor(rightLinkInd(psi,x),rightLinkInd(K,x),oldmid));
+        nfork = (lr ? ITensor(leftLinkInd(psi,x),leftLinkInd(K,x))
+                    : ITensor(rightLinkInd(psi,x),rightLinkInd(K,x)));
         temp = ITensor();
-        denmatDecomp(clust, temp, nfork,Fromleft,{"Cutoff",eps});
+        fprintf(stderr,"SVD mat dim: %dx%d\n",nels(nfork),nels(clust)/nels(nfork));
+        svdL(clust,temp,S,nfork,{"Cutoff",eps,"Maxm",MAXBD});
+        nfork *= S;
         res.Aref(x) = temp;
         }
     nfork = (clust * psi.A(ss)) * K.A(ss);
@@ -255,8 +260,8 @@ void applyMPO(const MPS& psi, const MPO& K, MPS& res , int lr) {
     auto itemp = ext;
     itemp.push_back(prime(findtype(psi.A(ss),Site)));
     auto A = ITensor(itemp);
-    if(lr) svd(nfork,A,S,B,{"Cutoff",eps});
-    else   svd(nfork,B,S,A,{"Cutoff",eps});
+    if(lr) svdL(nfork,A,S,B,{"Cutoff",eps});
+    else   svdL(nfork,B,S,A,{"Cutoff",eps});
     res.Aref(ss) = A;
     res.Aref((lr ? ss+1 : ss-1)) = S*B;
     
