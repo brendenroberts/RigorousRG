@@ -1,6 +1,6 @@
 // This file originally written by Miles S. as itensor/eigensolver.h
-// Altered by Brenden Roberts to iteratively find eigenpairs of ITensors
-//
+// Modified by Brenden Roberts to iteratively find eigenpairs of ITensors
+// July 2017
 #include "rrg.h"
 
 template <class BigMatrixT, class Tensor> 

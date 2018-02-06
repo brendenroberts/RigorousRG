@@ -1,12 +1,9 @@
 #include "rrg.h"
 #include <lapacke.h>
-#include <iostream>
-#include <fstream>
 #include <limits>
 #include <tuple>
 #include <stdexcept>
 #include "itensor/util/range.h"
-#include "itensor/global.h"
 #include "itensor/tensor/sliceten.h"
 
 using std::move;
@@ -56,8 +53,7 @@ template<typename T>
 void SVDRefL(MatRef<T> const& , MatRef<T> const& , VectorRef const& , MatRef<T> const& , Real);
 
 template<typename T>
-void
-SVDRefImplL(MatRef<T> const& M,
+int SVDRefImplL(MatRef<T> const& M,
             MatRef<T>  const& U, 
             VectorRef  const& D, 
             MatRef<T>  const& V,
@@ -71,7 +67,7 @@ SVDRefImplL(MatRef<T> const& M,
         LAPACK_INT static call(LAPACK_INT M_ , LAPACK_INT N_ ,
             Real* Adata , Real* Sdata , Real* Udata , Real* Vdata) {
             LAPACK_INT LDA_=M_,LDU_=M_,LDVT_=N_;
-            if(min(M_,N_) <= 16000) // ~2 GB workspace at double precision
+            if(min(M_,N_) <= 5000 && max(M_,N_) <= 20000)
                 return LAPACKE_dgesdd(LAPACK_COL_MAJOR,'S',M_,N_,
                     Adata,LDA_,Sdata,Udata,LDU_,Vdata,LDVT_);
             Real superb[min(M_,N_)-1];
@@ -84,7 +80,7 @@ SVDRefImplL(MatRef<T> const& M,
             auto pA = reinterpret_cast<LAPACK_COMPLEX*>(Adata); 
             auto pU = reinterpret_cast<LAPACK_COMPLEX*>(Udata); 
             auto pV = reinterpret_cast<LAPACK_COMPLEX*>(Vdata); 
-            if(min(M_,N_) <= int(16000/sqrt(2)))
+            if(min(M_,N_) <= int(5000/sqrt(2)) && max(M_,N_) <= int(20000/sqrt(2)))
                 return LAPACKE_zgesdd(LAPACK_COL_MAJOR,'S',M_,N_,
                     pA,LDA_,Sdata,pU,LDU_,pV,LDVT_);
             Real superb[min(M_,N_)-1];
@@ -99,8 +95,7 @@ SVDRefImplL(MatRef<T> const& M,
     else
         info = SVD::call(Mr,Mc,M.data(),D.data(),U.data(),V.data());
     
-    if(info) Error("Error in LAPACK SVD call");
-    return;
+    return info;
     }
 
 template<typename T>
@@ -111,7 +106,12 @@ SVDRefL(MatRef<T> const& M,
         MatRef<T>  const& V,
         Real thresh)
     {
-    SVDRefImplL(M,U,D,V,thresh);
+    auto info = SVDRefImplL(M,U,D,V,thresh);
+    if(info) {
+        fprintf(stderr,"Error %d in LAPACK SVD call... retrying\n",info);
+        info = SVDRefImplL(M,U,D,V,thresh);
+        if(info) Error("Error in LAPACK SVD call");
+        }
     }
 template void SVDRefL(MatRef<Real> const&,MatRef<Real> const&, VectorRef const&, MatRef<Real> const& , Real);
 template void SVDRefL(MatRef<Cplx> const&,MatRef<Cplx> const&, VectorRef const&, MatRef<Cplx> const& , Real);

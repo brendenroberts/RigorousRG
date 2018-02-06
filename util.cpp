@@ -1,7 +1,4 @@
 #include "rrg.h"
-#include <lapacke.h>
-#include <iostream>
-#include <fstream>
 
 int nels(const ITensor& A) {
     int n = 1;
@@ -54,14 +51,57 @@ void reducedDM(const MPS& psi , MPO& rho , int ls) {
     }
 
 template<class MPSLike>
-void regauge(MPSLike& psi , int o) {
-    psi.position((psi.N()-o+1),{"Cutoff",eps*1e-1});
-    psi.position(o,{"Cutoff",eps});
+void regauge(MPSLike& psi , int o, Real thr) {
+    psi.orthogonalize({"Cutoff",thr});
+    psi.position(o,{"Cutoff",0.0});
 
     return;
     }
+template void regauge(MPS& , int , Real);
+template void regauge(MPO& , int , Real);
+
+template<class MPSLike>
+void regauge(MPSLike& psi , int o) { regauge(psi,o,eps); }
 template void regauge(MPS& , int);
 template void regauge(MPO& , int);
+
+Real measEE(const MPS& state , int a) {
+    auto psi = state;
+    psi.position(a,{"Cutoff",0.0});
+
+    ITensor U = psi.A(a),S,V;
+    auto spectrum = svd(U*psi.A(a+1),U,S,V);
+
+    Real ret = 0.0;
+    for(auto p : spectrum.eigs()) if(p > 1e-18) ret += -p*log(p);
+    
+    return ret;
+    }
+
+Real measOp(const MPS& state, const ITensor& A, int a, const ITensor& B, int b) {
+    if(b <= a) Error("measOp requires a < b");
+    auto psi = state;
+    psi.position(a,{"Cutoff",0.0});
+    auto C = psi.A(a)*A*dag(prime(psi.A(a),Site,commonIndex(psi.A(a),psi.A(a+1),Link)));
+    
+    for(int k = a+1; k < b; ++k) {
+        C *= psi.A(k);
+        C *= dag(prime(psi.A(k),Link));
+        }
+
+    C *= psi.A(b);
+    C *= B;
+    C *= dag(prime(psi.A(b),Site,commonIndex(psi.A(b),psi.A(b-1),Link)));
+
+    return C.real();
+    }
+
+Real measOp(const MPS& state, const ITensor& A, int a) {
+    auto psi = state;
+    psi.position(a,{"Cutoff",0.0});
+    auto C = psi.A(a)*A*dag(prime(psi.A(a),Site));
+    return C.real();
+    }
 
 void combineVectors(const vector<ITensor>& vecs , ITensor& ret) {
     auto chi = commonIndex(ret,vecs[0]);
@@ -74,17 +114,15 @@ void combineVectors(const vector<ITensor>& vecs , ITensor& ret) {
 
     }
 
-vector<Real> dmrgMPO(const MPO& H , vector<MPS>& states , double penalty, double err) {
+vector<Real> dmrgMPO(const MPO& H , vector<MPS>& states , int num_sw , double penalty, double err) {
     vector<Real> evals;
     vector<MPS> exclude;
-    int num_sw = 40;
     for(auto& psi : states) {
         auto swp = Sweeps(num_sw);
-        num_sw = 50;
-        swp.maxm() = 50,50,100,100,500;
+        swp.maxm() = 100,100,500;
         swp.cutoff() = err;
-        swp.niter() = 3;
-        swp.noise() = 1E-7,1E-8,0.0;
+        swp.niter() = 8;
+        swp.noise() = 0.0;
  
         // dmrg call won't shut up
         std::stringstream ss;
@@ -99,21 +137,6 @@ vector<Real> dmrgMPO(const MPO& H , vector<MPS>& states , double penalty, double
     return evals;
     }
 
-vector<Real> dmrgMPO(const MPO& H , vector<MPS>& states , double penalty) {
-    return dmrgMPO(H,states,penalty,eps);
-    }
-
-ITensor svDense(const ITensor& A) {
-    auto a = A.inds()[0];
-    auto b = A.inds()[1];
-    ITensor ret(a,b);
-    int nA = std::min(a.m(),b.m());
-    for(int i = 1 ; i <= nA ; ++i)
-        ret.set(a(i),b(i),A.real(a(i),b(i)));
-
-    return ret;
-    }
-
 ITensor splitMPO(const MPO& O, MPO& P, int lr) {
     auto N = O.N();
     auto n = P.N();
@@ -124,50 +147,60 @@ ITensor splitMPO(const MPO& O, MPO& P, int lr) {
     ITensor U,S,V,R;
     Index sp,sq,ai,ei;
 
-    M.position(t);
+    M.position(t,{"Cutoff",0.0});
     int a[2] = {t-lr,t+1-lr};
     auto B = M.A(a[0])*M.A(a[1]);
     U = ITensor(HS.si(a[0]),HS.siP(a[0]),leftLinkInd(M,a[0]));
-    svdL(B,U,S,V,{"Cutoff",eps*1e-1});
+    svdL(B,U,S,V,{"Cutoff",0.0,"LeftIndexType",Select,"RightIndexType",Select});
     R = (lr ? V : U);
-    ai = commonIndex(S,R);
-    sp = hs.si((lr ? 1 : n)); sq = HS.si(t);
-    ei = Index("ext",ai.m(),Select);
-    S = svDense(S);
-    S *= delta(ai,ei);
-    R *= delta(ai,ei);
+    sp = hs.si((lr ? 1 : n));
+    sq = HS.si(t);
     P.Aref((lr ? 1 : n)) = R*delta(sp,sq)*delta(prime(sp),prime(sq));
-        
+    
     for(int i = 1 ; i < n ; ++i) {
-        int x = (lr ? i+1 : n-i);
-        sp = hs.si(x); sq = HS.si((lr ? t+x-1 : x));
-        P.Aref(x) = M.A((lr ? t+x-1 : x))*delta(sp,sq)*delta(prime(sp),prime(sq));
+        auto x = (lr ? i+1 : n-i); sp = hs.si(x);
+        auto y = (lr ? t+x-1 : x); sq = HS.si(y);
+        P.Aref(x) = M.A(y)*delta(sp,sq)*delta(prime(sp),prime(sq));
         }
     
     return S;
     }
 
+struct LRVal {
+    Real val;
+    int L,R;
+
+    LRVal(Real v , int l, int r) : val(v),L(l),R(r) {}
+};
+
+bool vcomp(LRVal& A , LRVal& B) { return A.val < B.val; }
+bool lcomp(LRVal& A , LRVal& B) { return A.L < B.L; }
+bool rcomp(LRVal& A , LRVal& B) { return A.R < B.R; }
+
+int argmax(vector<LRVal> vec) { return std::distance(vec.begin(),std::max_element(vec.begin(),vec.end(),vcomp));}
+int argmaxL(vector<LRVal> vec) { return std::distance(vec.begin(),std::max_element(vec.begin(),vec.end(),lcomp));}
+int argmaxR(vector<LRVal> vec) { return std::distance(vec.begin(),std::max_element(vec.begin(),vec.end(),rcomp));}
+
 void restrictMPO(const MPO& O , MPO& res , int ls , int D, int lr) {
     auto N = O.N();
     auto n = res.N();
     if(N == n) {res = O; return;}
-    int rs = ls+n-1;
-    const auto& hs = O.sites();
     const auto& sub = res.sites();
     auto M = O;
     ITensor U,V,SB;
+    int rs = ls+n-1;
    
     if(ls == 1) { // easy case: only dangling bond already at R end
-        SB = splitMPO(M,res,LEFT);
-        auto ei = Index("ext",std::min(D,(int)findtype(res.A(n),Select).m()),Select);
-        res.Aref(n) *= delta(ei,commonIndex(SB,res.A(n)));
-        regauge(res,n);
+        auto SS = splitMPO(M,res,LEFT);
+        auto ei = Index("ext",min(D,int(findtype(res.A(n),Select))),Select);
+        res.Aref(n) *= delta(ei,commonIndex(SS,res.A(n)));
+        regauge(res,n,epx);
         return;
     } else if(rs == N) { // easy case: only dangling bond already at L end
-        SB = splitMPO(M,res,RIGHT);
-        auto ei = Index("ext",std::min(D,(int)findtype(res.A(1),Select).m()),Select);
-        res.Aref(1) *= delta(ei,commonIndex(SB,res.A(1)));
-        regauge(res,1);
+        auto SS = splitMPO(M,res,RIGHT);
+        auto ei = Index("ext",min(D,int(findtype(res.A(1),Select))),Select);
+        res.Aref(1) *= delta(ei,commonIndex(SS,res.A(1)));
+        regauge(res,1,epx);
         return;
         }
 
@@ -184,93 +217,207 @@ void restrictMPO(const MPO& O , MPO& res , int ls , int D, int lr) {
         SL = splitMPO(M,tmp,RIGHT);
         SR = splitMPO(tmp,res,LEFT);
         }
-    SB = SL*SR;
-    Index li = Index("ext",std::min(D+5,(int)findtype(res.A(1),Select).m()),Select);
-    Index ri = Index("ext",std::min(D+5,(int)findtype(res.A(n),Select).m()),Select);
-    Index li2 = commonIndex(SL,res.A(1));
-    Index ri2 = commonIndex(SR,res.A(n));
-    res.Aref(1) *= delta(li,li2);
-    res.Aref(n) *= delta(ri,ri2);
-    SB *= delta(li,li2);
-    SB *= delta(ri,ri2);
+ 
+    Index li = commonIndex(SL,res.A(1));
+    Index ri = commonIndex(SR,res.A(n));
+
+    auto ldat = doTask(getReal{},SL.store());
+    cblas_dscal(int(li),SL.scale().real(),ldat.data(),1);
+    auto rdat = doTask(getReal{},SR.store());
+    cblas_dscal(int(ri),SR.scale().real(),rdat.data(),1);
+
+    vector<LRVal> args,wk;
+    args.reserve(D*D);
+    wk.reserve(2*D);
+   
+    for(int i = 0 ; i < std::min(2*D,int(li)) ; ++i)
+        wk.push_back(LRVal(ldat[i]*rdat[0],i+1,1));
+    
+    for(int i = 0 ; i < std::min(D*D,int(li)*int(ri)) ; ++i) {  
+        int amax = argmax(wk);
+        if(amax == int(wk.size())-1)
+            for(int j = 0,pln = wk.size() ; j < D && pln+j < int(li) ; ++j)
+                wk.push_back(LRVal(ldat[pln+j]*rdat[0],pln+j+1,1));
+        amax = argmax(wk);
+        if(wk[amax].val < eps) break;
+        args.push_back(wk[amax]);
+        wk[amax] = LRVal(ldat[wk[amax].L-1]*rdat[wk[amax].R],wk[amax].L,wk[amax].R+1);
+        }
+
+    auto lt = Index("L",args[argmaxL(args)].L,Select);
+    auto rt = Index("R",args[argmaxR(args)].R,Select);
+    auto ei = Index("ext",args.size(),Select);
+    auto UU = ITensor({lt,rt,ei});
+    int count = 1;
+    for(auto& it : args)
+        UU.set(lt(it.L),rt(it.R),ei(count++),1);
+    res.Aref(1) *= delta(lt,li);
+    res.Aref(n) *= delta(rt,ri);
 
     ITensor S;
     if(lr)
         for(int i = n-1 ; i >= 1 ; --i) {
             auto B = res.A(i)*res.A(i+1);
-            U = ITensor(sub.si(i),sub.siP(i),ri,(i == 1 ? li : leftLinkInd(res,i)));
+            U = ITensor(sub.si(i),sub.siP(i),rt,(i == 1 ? lt : leftLinkInd(res,i)));
             V = ITensor();
-            //denmatDecomp(B,U,V,Fromright,{"Cutoff",eps});
-            svdL(B,U,S,V,{"Cutoff",eps});
-            res.Aref(i) = U*S;
+            if(nels(B) < 1e7) {
+                denmatDecomp(B,U,V,Fromright,{"Cutoff",eps,"Maxm",MAXBD});
+            } else {
+                svdL(B,U,S,V,{"Cutoff",eps,"Maxm",MAXBD});
+                U *= S;
+                }
+            res.Aref(i) = U;
             res.Aref(i+1) = V;
             }
     else
         for(int i = 2 ; i <= n ; ++i) {
             auto B = res.A(i-1)*res.A(i);
             U = ITensor();
-            V = ITensor(sub.si(i),sub.siP(i),li,(i == n ? ri : rightLinkInd(res,i)));
-            //denmatDecomp(B,U,V,Fromleft,{"Cutoff",eps});
-            svdL(B,U,S,V,{"Cutoff",eps});
-            res.Aref(i-1) = U;
-            res.Aref(i) = V*S;
+            V = ITensor(sub.si(i),sub.siP(i),lt,(i == n ? rt : rightLinkInd(res,i)));
+            if(nels(B) < 1e7) {
+                denmatDecomp(B,U,V,Fromleft,{"Cutoff",eps,"Maxm",MAXBD});
+            } else {
+                svdL(B,U,S,V,{"Cutoff",eps,"Maxm",MAXBD});
+                V *= S;
+                }
+                res.Aref(i-1) = U;
+                res.Aref(i) = V;
             }
-    
-    // combine ext indices
-    U = ITensor(li,ri);
-    V = ITensor();
-    denmatDecomp(SB,U,V,Fromleft,{"Maxm",D*D,"Cutoff",eps});
-    auto ei = Index("ext",int(commonIndex(U,V)),Select);
-    U *= delta(ei,commonIndex(U,V));
-    res.Aref((lr ? 1 : n)) *= U;
-    regauge(res,(lr ? 1 : n));
 
-    return;
+    res.Aref(lr?1:n) *= UU;
+    regauge(res,lr?1:n,eps);
+    
+    return; 
     }
 
-void applyMPO(const MPS& psi, const MPO& K, MPS& res , int lr) {
+template<class Tensor>
+void applyMPO(MPSt<Tensor> const& psi, MPOt<Tensor> const& K, MPSt<Tensor>& res, int lr, Args const& args) {
+    using IndexT = typename Tensor::index_type;
     auto N = psi.N();
-    if(K.N() != N) Error("applyMPO mismatched N");
-    auto ss = (lr ? 1 : N);
-    auto st = (lr ? N : 1);
-    res = psi;
+    if(K.N() != N) Error("Mismatched N in applyMPO");
+    res = psi; 
+    res.mapprime(0,1,Site);
+    int ss = (lr ? 1 : N);
+    auto trunK = args.getBool("TruncateMPO",false);
     vector<Index> ext;
     if(findtype(psi.A(ss),Select)) ext.push_back(findtype(psi.A(ss),Select));
     if(findtype(K.A(ss),Select)) ext.push_back(findtype(K.A(ss),Select));
 
-    ITensor clust,nfork,temp,S;
-    for(int i = 0; i < N-1; i++) {
+    Index iA,iK,iT;
+    Tensor clust,nfork,S,tA,tK;
+    for(int i = 0; i < N-1; i++)
+        {
         int x = (lr ? N-i : i+1);
-        if(i == 0) { clust = psi.A(x) * K.A(x); }
-        else { clust = (nfork * psi.A(x)) * K.A(x); }
-        if(i == N-2) break;
+        if(trunK) {
+            iT = lr ? rightLinkInd(K,x) : leftLinkInd(K,x);
+            tK = i != 0 && iT != iK ? delta(iK,iT)*K.A(x) : K.A(x);
+            tA = psi.A(x);
+        } else {
+            iT = lr ? rightLinkInd(psi,x) : leftLinkInd(psi,x);
+            tA = i != 0 && iT != iA ? delta(iA,iT)*psi.A(x) : psi.A(x);
+            tK = K.A(x);
+            }
+        iA = lr ? leftLinkInd(psi,x) : rightLinkInd(psi,x);
+        iK = lr ? leftLinkInd(K,x) : rightLinkInd(K,x);
+        
+        if(i == 0) clust = psi.A(x) * K.A(x);
+        else clust = int(iK) > int(iA) ? (nfork * tK) * tA : (nfork * tA) * tK;
+        if(i == N-2) break; //No need to SVD for i == N-1
 
-        nfork = (lr ? ITensor(leftLinkInd(psi,x),leftLinkInd(K,x))
-                    : ITensor(rightLinkInd(psi,x),rightLinkInd(K,x)));
-        temp = ITensor();
-        fprintf(stderr,"SVD mat dim: %dx%d\n",nels(nfork),nels(clust)/nels(nfork));
-        svdL(clust,temp,S,nfork,{"Cutoff",eps,"Maxm",MAXBD});
-        nfork *= S;
-        res.Aref(x) = temp;
+        if(int(iK)*int(iA) > MAXDIM) { // truncate bond for memory stability
+            auto newlink = Index("nl",MAXDIM/int(trunK?iA:iK),Link);
+            fprintf(stderr,"truncating %s bond %d->%d...\n",trunK?"MPO":"MPS",int(trunK?iK:iA),int(newlink));
+            clust *= delta(trunK?iK:iA,newlink);
+            (trunK?iK:iA) = newlink;
+            }
+        nfork = Tensor(iA,iK);
+        if(int(iK)*int(iA) < 10000) {
+            denmatDecomp(clust,res.Anc(x),nfork,Fromleft,args);
+        } else {
+            svdL(clust,res.Anc(x),S,nfork,args);
+            nfork *= S;
+            }
+        IndexT mid = commonIndex(res.A(x),nfork,Link);
+        mid.dag();
+        if(lr)
+            res.Anc(x-1) = Tensor(mid,prime(res.sites()(x-1)));
+        else
+            res.Anc(x+1) = Tensor(mid,prime(res.sites()(x+1)));
         }
-    nfork = (clust * psi.A(ss)) * K.A(ss);
-   
-    // deal with multiple ext indices on final site
-    ITensor B;
-    auto itemp = ext;
-    itemp.push_back(prime(findtype(psi.A(ss),Site)));
-    auto A = ITensor(itemp);
-    if(lr) svdL(nfork,A,S,B,{"Cutoff",eps});
-    else   svdL(nfork,B,S,A,{"Cutoff",eps});
-    res.Aref(ss) = A;
-    res.Aref((lr ? ss+1 : ss-1)) = S*B;
-    
-    res.noprimelink();
-    res.mapprime(1,0,Site);    
-    regauge(res,ss);
-    if(ext.size() == 2)
-        res.Aref(ss) *= combiner(ext,{"IndexType",Select});
+    nfork = clust * psi.A(ss) * K.A(ss);
+
+    svdL(nfork,res.Anc(lr?ss+1:ss-1),S,res.Anc(ss),args);
+    res.Aref(ss) *= S;
+    if(ext.size() > 1) res.Aref(ss) *= combiner(ext,{"IndexType",Select});
+    res.mapprime(1,0,Site);
+    res.position(ss,{"Cutoff",0.0});
     }
+template void applyMPO(const MPS& , const MPO& , MPS& , int , const Args&);
+
+template<class Tensor>
+void applyMPO(MPOt<Tensor> const& psi, MPOt<Tensor> const& K, MPOt<Tensor>& res, int lr, Args const& args) {
+    using IndexT = typename Tensor::index_type;
+    auto N = psi.N();
+    if(K.N() != N) Error("Mismatched N in applyMPO");
+    res = psi; 
+    res.mapprime(1,2,Site);
+    int ss = (lr ? 1 : N);
+    auto trunK = args.getBool("TruncateMPO",false);
+    vector<Index> ext;
+    if(findtype(psi.A(ss),Select)) ext.push_back(findtype(psi.A(ss),Select));
+    if(findtype(K.A(ss),Select)) ext.push_back(findtype(K.A(ss),Select));
+
+    Index iA,iK,iT;
+    Tensor clust,nfork,S,tA,tK;
+    for(int i = 0; i < N-1; i++)
+        {
+        int x = (lr ? N-i : i+1);
+        if(trunK) {
+            iT = lr ? rightLinkInd(K,x) : leftLinkInd(K,x);
+            tK = i != 0 && iT != iK ? delta(iK,iT)*prime(K.A(x),Site) : prime(K.A(x),Site);
+            tA = psi.A(x);
+        } else {
+            iT = lr ? rightLinkInd(psi,x) : leftLinkInd(psi,x);
+            tA = i != 0 && iT != iA ? delta(iA,iT)*psi.A(x) : psi.A(x);
+            tK = prime(K.A(x),Site);
+            }
+        iA = lr ? leftLinkInd(psi,x) : rightLinkInd(psi,x);
+        iK = lr ? leftLinkInd(K,x) : rightLinkInd(K,x);
+        
+        if(i == 0) clust = psi.A(x) * prime(K.A(x),Site);
+        else clust = int(iK) > int(iA) ? (nfork * tK) * tA : (nfork * tA) * tK;
+        if(i == N-2) break; //No need to SVD for i == N-1
+        //Print(clust);
+
+        if(int(iK)*int(iA) > MAXDIM) { // truncate bond for memory stability
+            auto newlink = Index("nl",MAXDIM/int(trunK?iA:iK),Link);
+            fprintf(stderr,"truncating %s bond %d->%d...\n",trunK?"MPO":"MPS",int(trunK?iK:iA),int(newlink));
+            clust *= delta(trunK?iK:iA,newlink);
+            (trunK?iK:iA) = newlink;
+            }
+        nfork = Tensor(iA,iK);
+        if(int(iK)*int(iA) < 10000) {
+            denmatDecomp(clust,res.Anc(x),nfork,Fromleft,args);
+        } else {
+            svdL(clust,res.Anc(x),S,nfork,args);
+            nfork *= S;
+            }
+        IndexT mid = commonIndex(res.A(x),nfork,Link);
+        mid.dag();
+        if(lr)
+            res.Anc(x-1) = Tensor(mid,res.sites()(x-1),prime(res.sites()(x-1),2));
+        else
+            res.Anc(x+1) = Tensor(mid,res.sites()(x+1),prime(res.sites()(x+1),2));
+        }
+    nfork = clust * psi.A(ss) * prime(K.A(ss),Site);
+
+    svdL(nfork,res.Anc(lr?ss+1:ss-1),S,res.Anc(ss),args);
+    res.Aref(ss) *= S;
+    if(ext.size() > 1) res.Aref(ss) *= combiner(ext,{"IndexType",Select});
+    res.mapprime(2,1,Site);
+    res.position(ss,{"Cutoff",0.0});
+    }
+template void applyMPO(const MPO& , const MPO& , MPO& , int , const Args&);
 
 ITensor overlapT(const MPS& phi, const MPS& psi) {
     auto N = phi.N();
@@ -319,19 +466,19 @@ void tensorProduct(const MPS& psiA, const MPS& psiB, MPS& ret, const ITensor& W,
         ret.Aref(n+i) = psiB.A(i)*delta(spB,spBr);
         }
 
-    // Gauge merged MPS starting in the middle
+    // Move selection index from middle to edge
     for(int i = 0 ; i < n ; ++i) {
         int x = (lr ? n-i : n+i);
         sp = hs.si(x);
         ai = commonIndex(ret.A(x-1),ret.A(x));
-        T = ret.A(x)*(x == n ? W*ret.A(x+1) : ret.A(x+1));
-        if(x == n) ei = findtype(T,Select);
+        T = ret.A(x)*(i == 0 ? W*ret.A(x+1) : ret.A(x+1));
+        if(i == 0) ei = findtype(T,Select);
         U = (lr ? ITensor(sp,ai,ei) : ITensor(sp,ai));
-        svd(T,U,S,V,{"Cutoff",eps,"Maxm",MAXBD});
+        svdL(T,U,S,V,{"Cutoff",eps,"Maxm",MAXBD});
         ret.Aref(x)   = (lr ? U*S : U);
         ret.Aref(x+1) = (lr ? V : S*V);
         }
-    regauge(ret,(lr ? 1 : N));
+    regauge(ret,(lr?1:N),eps);
    
     return; 
     }
@@ -361,7 +508,7 @@ void combineMPS(vector<MPS>& vecs , MPS& ret, int lr) {
             bsum += bi.m();
             }
         U = ITensor(sp);
-        svd(A,U,S,V,{"Cutoff",eps*1e-1});
+        svdL(A,U,S,V,{"Cutoff",0.0});
         inds.push_back(bk);
         ret.Aref(1) = U;
         
@@ -387,7 +534,7 @@ void combineMPS(vector<MPS>& vecs , MPS& ret, int lr) {
                 }
             A *= S*V;
             U = ITensor(commonIndex(U,S),sp);
-            svd(A,U,S,V,{"Cutoff",eps*1e-1});
+            svdL(A,U,S,V,{"Cutoff",0.0});
             inds.push_back(bk);
             ret.Aref(i) = U;
             }
@@ -409,7 +556,7 @@ void combineMPS(vector<MPS>& vecs , MPS& ret, int lr) {
             }
         A *= S*V;
         ret.Aref(N) = A;
-        ret.position(N,{"Cutoff",eps});
+        regauge(ret,N,0.0);
     } else if(lr == RIGHT) { 
         // Do last tensor
         int bm = 0;
@@ -427,7 +574,7 @@ void combineMPS(vector<MPS>& vecs , MPS& ret, int lr) {
             bsum += bi.m();
             }
         V = ITensor(sp);
-        svd(A,U,S,V,{"Cutoff",eps*1e-1});
+        svdL(A,U,S,V,{"Cutoff",0.0});
         inds.push_back(bk);
         ret.Aref(N) = V;
 
@@ -454,7 +601,7 @@ void combineMPS(vector<MPS>& vecs , MPS& ret, int lr) {
             A *= U*S;
             V = ITensor(commonIndex(V,S),sp);
             U = ITensor();
-            svd(A,U,S,V,{"Cutoff",eps*1e-1});
+            svdL(A,U,S,V,{"Cutoff",0.0});
             inds.push_back(bk);
             ret.Aref(i) = V;
             }
@@ -476,7 +623,7 @@ void combineMPS(vector<MPS>& vecs , MPS& ret, int lr) {
             }
         A *= U*S;
         ret.Aref(1) = A;
-        ret.position(1,{"Cutoff",eps});
+        regauge(ret,1,0.0);
         }
 
     return; 

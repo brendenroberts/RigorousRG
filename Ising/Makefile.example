@@ -1,16 +1,29 @@
 LIBRARY_DIR=$(HOME)/ITensor
+ARPACKPP_INC=$(HOME)/arpackpp/include
 
 APP=rrg
 
 HEADERS=../rrg.h
-CCFILES=$(APP).cpp ../util.cpp ../trotter.cpp ../tensorProdH.cpp ../davidson.cpp ../svdL.cpp
 
-LDFLAGS= -I..
+# Uncomment the following line if you do not have ARPACK++ installed
+# NO_ARPACK = 1
 
 #################################################################
 #################################################################
 #################################################################
 #################################################################
+
+ifeq ($(NO_ARPACK),1)
+    CCFILES=$(APP).cpp ../util.cpp ../trotter.cpp \
+	../tensorProdH.cpp ../svdL.cpp ../davidson.cpp
+    C2FLAGS= -I.. -Wno-unused-function
+else
+
+    CCFILES=$(APP).cpp ../util.cpp ../trotter.cpp \
+	../tensorProdH.cpp ../svdL.cpp
+    C2FLAGS= -I.. -larpack -I$(ARPACKPP_INC) \
+	-Wno-unused-function -Wno-maybe-uninitialized -DUSE_ARPACK
+endif
 
 include $(LIBRARY_DIR)/this_dir.mk
 include $(LIBRARY_DIR)/options.mk
@@ -24,10 +37,10 @@ GOBJECTS=$(patsubst %,.debug_objs/%, $(OBJECTS))
 #Rules ------------------
 
 %.o: %.cc $(HEADERS) $(TENSOR_HEADERS)
-	$(CCCOM) -c $(CCFLAGS) -o $@ $<
+	$(CCCOM) -c $(CCFLAGS) $(C2FLAGS) -o $@ $<
 
 .debug_objs/%.o: %.cc $(HEADERS) $(TENSOR_HEADERS)
-	$(CCCOM) -c $(CCGFLAGS) -o $@ $<
+	$(CCCOM) -c $(CCGFLAGS) $(C2FLAGS) -o $@ $<
 
 #Targets -----------------
 
@@ -35,7 +48,7 @@ build: $(APP)
 debug: $(APP)-g
 
 $(APP): $(OBJECTS) $(ITENSOR_LIBS)
-	$(CCCOM) $(CCFLAGS) $(OBJECTS) -o $(APP) $(LIBFLAGS) $(LDFLAGS)
+	$(CCCOM) $(CCFLAGS) $(C2FLAGS) $(OBJECTS) -o $(APP) $(LIBFLAGS)
 
 $(APP)-g: mkdebugdir $(GOBJECTS) $(ITENSOR_GLIBS)
 	$(CCCOM) $(CCGFLAGS) $(GOBJECTS) -o $(APP)-g $(LIBGFLAGS)
