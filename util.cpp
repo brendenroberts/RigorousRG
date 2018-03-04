@@ -17,10 +17,8 @@ void reducedDM(const MPS& psi , MPO& rho , int ls) {
     ITensor L,R,C;
     Index ai,bi,ci;
 
-    for(int i = 1 ; i < ls ; ++i) {
-        auto sp = hs.si(i);
-        L = (i == 1 ? psi.A(i) : L*psi.A(i))*psip.A(i)*delta(sp,prime(sp));
-        }
+    for(int i = 1 ; i < ls ; ++i)
+        L = (i == 1 ? psi.A(i) : L*psi.A(i))*psip.A(i)*delta(hs.si(i),hs.siP(i));
 
     for(int i = ls ; i <= rs ; ++i) {
         int r = i-ls+1;
@@ -40,10 +38,8 @@ void reducedDM(const MPS& psi , MPO& rho , int ls) {
         rho.Aref(r) = T*delta(hs.si(i),sub.si(r))*delta(hs.siP(i),sub.siP(r));
         }
 
-    for(int i = rs+1 ; i <= N ; ++i) {
-        auto sp = hs.si(i);
-        R = (i == rs+1 ? psi.A(i) : R*psi.A(i))*psip.A(i)*delta(sp,prime(sp));
-        }
+    for(int i = rs+1 ; i <= N ; ++i)
+        R = (i == rs+1 ? psi.A(i) : R*psi.A(i))*psip.A(i)*delta(hs.si(i),hs.siP(i));
     
     if(R) rho.Aref(n) *= R;
 
@@ -51,19 +47,14 @@ void reducedDM(const MPS& psi , MPO& rho , int ls) {
     }
 
 template<class MPSLike>
-void regauge(MPSLike& psi , int o, Real thr) {
-    psi.orthogonalize({"Cutoff",thr});
-    psi.position(o,{"Cutoff",0.0});
+void regauge(MPSLike& psi , int o, Args const& args) {
+    psi.orthogonalize(args);
+    psi.position(o,args);
 
     return;
     }
-template void regauge(MPS& , int , Real);
-template void regauge(MPO& , int , Real);
-
-template<class MPSLike>
-void regauge(MPSLike& psi , int o) { regauge(psi,o,eps); }
-template void regauge(MPS& , int);
-template void regauge(MPO& , int);
+template void regauge(MPS& , int , Args const&);
+template void regauge(MPO& , int , Args const&);
 
 Real measEE(const MPS& state , int a) {
     auto psi = state;
@@ -78,12 +69,24 @@ Real measEE(const MPS& state , int a) {
     return ret;
     }
 
+MPO sysOp(const SiteSet& hs, const char* op_name, const Real scale) {
+    auto ret = MPO(hs);    
+    auto N = hs.N();
+
+    for(int i = 1 ; i <= N ; ++i) {
+        auto cur = scale*ITensor(hs.op(op_name,i));
+        ret.Aref(i) = cur;
+        }
+
+    return ret;
+    }
+
 Real measOp(const MPS& state, const ITensor& A, int a, const ITensor& B, int b) {
     if(b <= a) Error("measOp requires a < b");
     auto psi = state;
     psi.position(a,{"Cutoff",0.0});
-    auto C = psi.A(a)*A*dag(prime(psi.A(a),Site,commonIndex(psi.A(a),psi.A(a+1),Link)));
     
+    auto C = psi.A(a)*A*dag(prime(psi.A(a),Site,commonIndex(psi.A(a),psi.A(a+1),Link)));
     for(int k = a+1; k < b; ++k) {
         C *= psi.A(k);
         C *= dag(prime(psi.A(k),Link));
@@ -103,15 +106,26 @@ Real measOp(const MPS& state, const ITensor& A, int a) {
     return C.real();
     }
 
-void combineVectors(const vector<ITensor>& vecs , ITensor& ret) {
-    auto chi = commonIndex(ret,vecs[0]);
-    auto ext = uniqueIndex(ret,vecs[0],Select);
-    if(ext.m() != int(vecs.size())) Error("index/vector mismatch in combineVectors");
+ITensor measBd(const MPS& psi, const MPS& phi, const ITensor& A, int lr) {
+    auto N = psi.N();
+    auto ss = lr ? 1 : N;
+    auto st = lr ? N : 1;
 
-    for(int i = 1 ; i <= chi.m() ; ++i)
-        for(int j = 1 ; j <= ext.m() ; ++j)
-            ret.set(chi(i),ext(j),vecs[j-1].real(chi(i)));
+    if(findtype(psi.A(ss),Link) == findtype(phi.A(ss),Link))
+        return (psi.A(ss)*A)*primeExcept(psi.A(ss),Link);
 
+    ITensor T = psi.A(st)*phi.A(st);
+
+    for(int i = 1; i < N-1; i++) {
+        int x = (lr ? N-i : i+1);
+        T *= psi.A(x);
+        T *= phi.A(x);
+        }   
+    T *= psi.A(ss);
+    T *= A;
+    T *= primeExcept(phi.A(ss),Link);
+    
+    return T;
     }
 
 vector<Real> dmrgMPO(const MPO& H , vector<MPS>& states , int num_sw , double penalty, double err) {
@@ -119,9 +133,9 @@ vector<Real> dmrgMPO(const MPO& H , vector<MPS>& states , int num_sw , double pe
     vector<MPS> exclude;
     for(auto& psi : states) {
         auto swp = Sweeps(num_sw);
-        swp.maxm() = 100,100,500;
+        swp.maxm() = 100,100,100,200,200,200;
         swp.cutoff() = err;
-        swp.niter() = 8;
+        swp.niter() = 4;
         swp.noise() = 0.0;
  
         // dmrg call won't shut up
@@ -130,7 +144,7 @@ vector<Real> dmrgMPO(const MPO& H , vector<MPS>& states , int num_sw , double pe
         auto e = dmrg(psi,H,exclude,swp,{"Quiet",true,"PrintEigs",false,"Weight",penalty});
         std::cout.rdbuf(out);
 
-        exclude.push_back(psi);
+        if(exclude.size() == 0) exclude.push_back(psi);
         evals.push_back(e);
         }
 
@@ -194,13 +208,13 @@ void restrictMPO(const MPO& O , MPO& res , int ls , int D, int lr) {
         auto SS = splitMPO(M,res,LEFT);
         auto ei = Index("ext",min(D,int(findtype(res.A(n),Select))),Select);
         res.Aref(n) *= delta(ei,commonIndex(SS,res.A(n)));
-        regauge(res,n,epx);
+        regauge(res,n,{"Cutoff",epx});
         return;
     } else if(rs == N) { // easy case: only dangling bond already at L end
         auto SS = splitMPO(M,res,RIGHT);
         auto ei = Index("ext",min(D,int(findtype(res.A(1),Select))),Select);
         res.Aref(1) *= delta(ei,commonIndex(SS,res.A(1)));
-        regauge(res,1,epx);
+        regauge(res,1,{"Cutoff",epx});
         return;
         }
 
@@ -230,10 +244,10 @@ void restrictMPO(const MPO& O , MPO& res , int ls , int D, int lr) {
     args.reserve(D*D);
     wk.reserve(2*D);
    
-    for(int i = 0 ; i < std::min(2*D,int(li)) ; ++i)
+    for(int i = 0 ; i < min(2*D,int(li)) ; ++i)
         wk.push_back(LRVal(ldat[i]*rdat[0],i+1,1));
     
-    for(int i = 0 ; i < std::min(D*D,int(li)*int(ri)) ; ++i) {  
+    for(int i = 0 ; i < min(D*D,int(li)*int(ri)) ; ++i) {  
         int amax = argmax(wk);
         if(amax == int(wk.size())-1)
             for(int j = 0,pln = wk.size() ; j < D && pln+j < int(li) ; ++j)
@@ -249,8 +263,7 @@ void restrictMPO(const MPO& O , MPO& res , int ls , int D, int lr) {
     auto ei = Index("ext",args.size(),Select);
     auto UU = ITensor({lt,rt,ei});
     int count = 1;
-    for(auto& it : args)
-        UU.set(lt(it.L),rt(it.R),ei(count++),1);
+    for(auto& it : args) UU.set(lt(it.L),rt(it.R),ei(count++),1);
     res.Aref(1) *= delta(lt,li);
     res.Aref(n) *= delta(rt,ri);
 
@@ -285,154 +298,77 @@ void restrictMPO(const MPO& O , MPO& res , int ls , int D, int lr) {
             }
 
     res.Aref(lr?1:n) *= UU;
-    regauge(res,lr?1:n,eps);
+    regauge(res,lr?1:n,{"Cutoff",eps});
     
     return; 
     }
 
 template<class Tensor>
-void applyMPO(MPSt<Tensor> const& psi, MPOt<Tensor> const& K, MPSt<Tensor>& res, int lr, Args const& args) {
+void applyMPO(MPSt<Tensor> const& psi_in, MPOt<Tensor> const& K_in, MPSt<Tensor>& res, int lr, Args const& args) {
     using IndexT = typename Tensor::index_type;
+    auto psi = psi_in;
+    auto K = K_in;
     auto N = psi.N();
     if(K.N() != N) Error("Mismatched N in applyMPO");
-    res = psi; 
-    res.mapprime(0,1,Site);
-    int ss = (lr ? 1 : N);
     auto trunK = args.getBool("TruncateMPO",false);
+    int ss = lr ? 1 : N , st = lr ? N : 1;
     vector<Index> ext;
     if(findtype(psi.A(ss),Select)) ext.push_back(findtype(psi.A(ss),Select));
     if(findtype(K.A(ss),Select)) ext.push_back(findtype(K.A(ss),Select));
+    res = psi; res.mapprime(0,1,Site);
+    if((int)ext.size() > 1) res.Aref(ss) *= setElt(ext[1](1));
+
+    psi.position(ss); K.position(ss);
 
     Index iA,iK,iT;
     Tensor clust,nfork,S,tA,tK;
-    for(int i = 0; i < N-1; i++)
-        {
-        int x = (lr ? N-i : i+1);
+    for(int i = 0; i < N-1; i++) {
+        int x = (lr ? i+1 : N-i);
         if(trunK) {
-            iT = lr ? rightLinkInd(K,x) : leftLinkInd(K,x);
+            iT = lr ? leftLinkInd(K,x) : rightLinkInd(K,x);
             tK = i != 0 && iT != iK ? delta(iK,iT)*K.A(x) : K.A(x);
             tA = psi.A(x);
         } else {
-            iT = lr ? rightLinkInd(psi,x) : leftLinkInd(psi,x);
+            iT = lr ? leftLinkInd(psi,x) : rightLinkInd(psi,x);
             tA = i != 0 && iT != iA ? delta(iA,iT)*psi.A(x) : psi.A(x);
             tK = K.A(x);
             }
-        iA = lr ? leftLinkInd(psi,x) : rightLinkInd(psi,x);
-        iK = lr ? leftLinkInd(K,x) : rightLinkInd(K,x);
-        
+        iA = lr ? rightLinkInd(psi,x) : leftLinkInd(psi,x);
+        iK = lr ? rightLinkInd(K,x) : leftLinkInd(K,x);
+ 
         if(i == 0) clust = psi.A(x) * K.A(x);
         else clust = int(iK) > int(iA) ? (nfork * tK) * tA : (nfork * tA) * tK;
         if(i == N-2) break; //No need to SVD for i == N-1
 
-        if(int(iK)*int(iA) > MAXDIM) { // truncate bond for memory stability
-            auto newlink = Index("nl",MAXDIM/int(trunK?iA:iK),Link);
-            fprintf(stderr,"truncating %s bond %d->%d...\n",trunK?"MPO":"MPS",int(trunK?iK:iA),int(newlink));
-            clust *= delta(trunK?iK:iA,newlink);
-            (trunK?iK:iA) = newlink;
-            }
+//        if(int(iK)*int(iA) > MAXDIM) { // truncate bond for memory stability
+//            auto newlink = Index("nl",MAXDIM/int(trunK?iA:iK),Link);
+//            fprintf(stderr,"truncating %s bond %d->%d...\n",trunK?"MPO":"MPS",int(trunK?iK:iA),int(newlink));
+//            clust *= delta(trunK?iK:iA,newlink);
+//            (trunK?iK:iA) = newlink;
+//            }
         nfork = Tensor(iA,iK);
         if(int(iK)*int(iA) < 10000) {
-            denmatDecomp(clust,res.Anc(x),nfork,Fromleft,args);
+            denmatDecomp(clust,nfork,res.Anc(x),Fromright,args);
         } else {
-            svdL(clust,res.Anc(x),S,nfork,args);
+            svdL(clust,nfork,S,res.Anc(x),args);
             nfork *= S;
             }
         IndexT mid = commonIndex(res.A(x),nfork,Link);
         mid.dag();
         if(lr)
-            res.Anc(x-1) = Tensor(mid,prime(res.sites()(x-1)));
-        else
             res.Anc(x+1) = Tensor(mid,prime(res.sites()(x+1)));
+        else
+            res.Anc(x-1) = Tensor(mid,prime(res.sites()(x-1)));
         }
-    nfork = clust * psi.A(ss) * K.A(ss);
+    nfork = clust * psi.A(st) * K.A(st);
 
-    svdL(nfork,res.Anc(lr?ss+1:ss-1),S,res.Anc(ss),args);
-    res.Aref(ss) *= S;
+    svdL(nfork,res.Aref(lr?st-1:st+1),S,res.Aref(st),args);
+    res.Aref(st) *= S;
+    regauge(res,ss,{"Cutoff",1e-16});
     if(ext.size() > 1) res.Aref(ss) *= combiner(ext,{"IndexType",Select});
     res.mapprime(1,0,Site);
-    res.position(ss,{"Cutoff",0.0});
     }
 template void applyMPO(const MPS& , const MPO& , MPS& , int , const Args&);
-
-template<class Tensor>
-void applyMPO(MPOt<Tensor> const& psi, MPOt<Tensor> const& K, MPOt<Tensor>& res, int lr, Args const& args) {
-    using IndexT = typename Tensor::index_type;
-    auto N = psi.N();
-    if(K.N() != N) Error("Mismatched N in applyMPO");
-    res = psi; 
-    res.mapprime(1,2,Site);
-    int ss = (lr ? 1 : N);
-    auto trunK = args.getBool("TruncateMPO",false);
-    vector<Index> ext;
-    if(findtype(psi.A(ss),Select)) ext.push_back(findtype(psi.A(ss),Select));
-    if(findtype(K.A(ss),Select)) ext.push_back(findtype(K.A(ss),Select));
-
-    Index iA,iK,iT;
-    Tensor clust,nfork,S,tA,tK;
-    for(int i = 0; i < N-1; i++)
-        {
-        int x = (lr ? N-i : i+1);
-        if(trunK) {
-            iT = lr ? rightLinkInd(K,x) : leftLinkInd(K,x);
-            tK = i != 0 && iT != iK ? delta(iK,iT)*prime(K.A(x),Site) : prime(K.A(x),Site);
-            tA = psi.A(x);
-        } else {
-            iT = lr ? rightLinkInd(psi,x) : leftLinkInd(psi,x);
-            tA = i != 0 && iT != iA ? delta(iA,iT)*psi.A(x) : psi.A(x);
-            tK = prime(K.A(x),Site);
-            }
-        iA = lr ? leftLinkInd(psi,x) : rightLinkInd(psi,x);
-        iK = lr ? leftLinkInd(K,x) : rightLinkInd(K,x);
-        
-        if(i == 0) clust = psi.A(x) * prime(K.A(x),Site);
-        else clust = int(iK) > int(iA) ? (nfork * tK) * tA : (nfork * tA) * tK;
-        if(i == N-2) break; //No need to SVD for i == N-1
-        //Print(clust);
-
-        if(int(iK)*int(iA) > MAXDIM) { // truncate bond for memory stability
-            auto newlink = Index("nl",MAXDIM/int(trunK?iA:iK),Link);
-            fprintf(stderr,"truncating %s bond %d->%d...\n",trunK?"MPO":"MPS",int(trunK?iK:iA),int(newlink));
-            clust *= delta(trunK?iK:iA,newlink);
-            (trunK?iK:iA) = newlink;
-            }
-        nfork = Tensor(iA,iK);
-        if(int(iK)*int(iA) < 10000) {
-            denmatDecomp(clust,res.Anc(x),nfork,Fromleft,args);
-        } else {
-            svdL(clust,res.Anc(x),S,nfork,args);
-            nfork *= S;
-            }
-        IndexT mid = commonIndex(res.A(x),nfork,Link);
-        mid.dag();
-        if(lr)
-            res.Anc(x-1) = Tensor(mid,res.sites()(x-1),prime(res.sites()(x-1),2));
-        else
-            res.Anc(x+1) = Tensor(mid,res.sites()(x+1),prime(res.sites()(x+1),2));
-        }
-    nfork = clust * psi.A(ss) * prime(K.A(ss),Site);
-
-    svdL(nfork,res.Anc(lr?ss+1:ss-1),S,res.Anc(ss),args);
-    res.Aref(ss) *= S;
-    if(ext.size() > 1) res.Aref(ss) *= combiner(ext,{"IndexType",Select});
-    res.mapprime(2,1,Site);
-    res.position(ss,{"Cutoff",0.0});
-    }
-template void applyMPO(const MPO& , const MPO& , MPO& , int , const Args&);
-
-ITensor overlapT(const MPS& phi, const MPS& psi) {
-    auto N = phi.N();
-    if(psi.N() != N) Error("overlap mismatched N");
-    auto lr = (findtype(phi.A(N),Select) ? LEFT : RIGHT);
-    ITensor L;
-
-    for(int i = 0 ; i < N ; ++i) {
-        int x = (lr ? N-i : i+1);
-        L = (i ? L*phi.A(x) : phi.A(x));
-        L *= dag(primeExcept(psi.A(x),Site));
-        }
-    
-    return L;
-    }
 
 ITensor overlapT(const MPS& phi, const MPO& H, const MPS& psi) {
     auto N = H.N();
@@ -450,181 +386,201 @@ ITensor overlapT(const MPS& phi, const MPO& H, const MPS& psi) {
     return L;
     }
 
+ITensor overlapT(const MPS& phi, const MPS& psi) { return overlapT(phi,sysOp(phi.sites(),"Id"),psi); }
+
 void tensorProduct(const MPS& psiA, const MPS& psiB, MPS& ret, const ITensor& W, int lr) {
     const int N = ret.N();
     const int n = psiA.N();
     const auto& hs  = ret.sites();
     const auto& hsA = psiA.sites();
     const auto& hsB = psiB.sites();
-    Index ai,ei,sp;
+    Index ei;
     ITensor T,U,S,V;
     
     for(int i = 1 ; i <= n ; ++i) {
-        Index spA  = hsA.si(i); Index spB  = hsB.si(i);
-        Index spAr = hs.si(i);  Index spBr = hs.si(n+i);
-        ret.Aref(i)   = psiA.A(i)*delta(spA,spAr);
-        ret.Aref(n+i) = psiB.A(i)*delta(spB,spBr);
+        ret.Aref(i)   = psiA.A(i)*delta(hsA.si(i),hs.si(i));
+        ret.Aref(n+i) = psiB.A(i)*delta(hsB.si(i),hs.si(n+i));
         }
 
     // Move selection index from middle to edge
     for(int i = 0 ; i < n ; ++i) {
         int x = (lr ? n-i : n+i);
-        sp = hs.si(x);
-        ai = commonIndex(ret.A(x-1),ret.A(x));
+        auto ai = commonIndex(ret.A(x-1),ret.A(x));
         T = ret.A(x)*(i == 0 ? W*ret.A(x+1) : ret.A(x+1));
         if(i == 0) ei = findtype(T,Select);
-        U = (lr ? ITensor(sp,ai,ei) : ITensor(sp,ai));
-        svdL(T,U,S,V,{"Cutoff",eps,"Maxm",MAXBD});
+        U = (lr && ei ? ITensor(hs.si(x),ai,ei) : ITensor(hs.si(x),ai));
+        svdL(T,U,S,V,{"Cutoff",eps*1e-1});
         ret.Aref(x)   = (lr ? U*S : U);
         ret.Aref(x+1) = (lr ? V : S*V);
         }
-    regauge(ret,(lr?1:N),eps);
+    
+    regauge(ret,(lr?1:N),{"Cutoff",eps,"Maxm",MAXBD});
    
     return; 
     }
-
-void combineMPS(vector<MPS>& vecs , MPS& ret, int lr) {
+   
+template<class Tensor> 
+int combineMPS(const vector<MPSt<Tensor> >& v_in , MPSt<Tensor>& ret, int lr) {
+    if((int)v_in.size() == 0) return 0;
+    using IndexT = typename Tensor::index_type;
     const int N = ret.N();
-    const int nvc = vecs.size();
     const auto& hs = ret.sites();
-    Index ak,bk,vi;
-    ITensor U,S,V;
-    vector<Index> inds;
-    
+    const int ss = (lr ? 1 : N);
+    auto vecs = v_in;
+    vector<IndexT> inds,ext;
+    IndexT ak,bk,ci,vi,sp;
+    Tensor T,U,S,V;
+
+    int nx = 0;
+    for(auto& v : vecs) {
+        nx += (ci = findtype(v.A(ss),Select)) ? int(ci) : 1;
+        v.position(ss,{"Cutoff",1e-16});
+        }
+
     if(lr == LEFT) {
         // Do first tensor
         int bm = 0;
-        for(auto& v : vecs) bm += rightLinkInd(v,1).m();
-        bk = Index("link",bm);
-        auto sp = hs.si(1);
-        ITensor A(bk,sp);
-        int bsum = 0;
-        for(auto& v : vecs) {
-            auto bi = rightLinkInd(v,1);
-            for(int b = 1 ; b <= bi.m() ; ++b) {
-                A.set(bk(bsum+b),sp(1),v.A(1).real(sp(1),bi(b)));
-                A.set(bk(bsum+b),sp(2),v.A(1).real(sp(2),bi(b)));
-                }
-            bsum += bi.m();
-            }
-        U = ITensor(sp);
-        svdL(A,U,S,V,{"Cutoff",0.0});
-        inds.push_back(bk);
-        ret.Aref(1) = U;
-        
-        // Do middle tensors
-        for(int i = 2 ; i < N ; ++i) {
-            int bm = 0;
-            for(auto& v : vecs) bm += rightLinkInd(v,i).m();
-            ak = inds.back();
-            bk = Index("link",bm);
-            sp = hs.si(i);
-            A = ITensor(ak,bk,sp);
-            int asum = 0 , bsum = 0;
-            for(auto& v : vecs) {
-                auto ai = leftLinkInd(v,i);
-                auto bi = rightLinkInd(v,i);
-                for(int a = 1 ; a <= ai.m() ; ++a)
-                    for(int b = 1 ; b <= bi.m() ; ++b) {
-                        A.set(ak(asum+a),bk(bsum+b),sp(1),v.A(i).real(sp(1),ai(a),bi(b)));
-                        A.set(ak(asum+a),bk(bsum+b),sp(2),v.A(i).real(sp(2),ai(a),bi(b)));
-                        }
-                asum += ai.m();
-                bsum += bi.m();
-                }
-            A *= S*V;
-            U = ITensor(commonIndex(U,S),sp);
-            svdL(A,U,S,V,{"Cutoff",0.0});
-            inds.push_back(bk);
-            ret.Aref(i) = U;
-            }
-        
-        // Do last tensor
-        vi = Index("ext",nvc,Select);
-        ak = inds.back();
+        for(auto& v : vecs) bm += int(leftLinkInd(v,N));
+        vi = Index("ext",nx,Select);
+        bk = IndexT("li",bm);
         sp = hs.si(N);
-        A = ITensor(vi,ak,sp);
-        int asum = 0 , ct = 1;
-        for(auto& v : vecs) {
-            auto ai = leftLinkInd(v,N);
-            for(int a = 1 ; a <= ai.m() ; ++a) {
-                A.set(vi(ct),ak(asum+a),sp(1),v.A(N).real(sp(1),ai(a)));
-                A.set(vi(ct),ak(asum+a),sp(2),v.A(N).real(sp(2),ai(a)));
-                }
-            asum += ai.m();
-            ct++;
-            }
-        A *= S*V;
-        ret.Aref(N) = A;
-        regauge(ret,N,0.0);
-    } else if(lr == RIGHT) { 
-        // Do last tensor
-        int bm = 0;
-        for(auto& v : vecs) bm += leftLinkInd(v,N).m();
-        bk = Index("link",bm);
-        auto sp = hs.si(N);
-        ITensor A(bk,sp);
-        int bsum = 0;
+        Tensor A(vi,bk,sp);
+        int bsum = 0, nsum = 0;
         for(auto& v : vecs) {
             auto bi = leftLinkInd(v,N);
-            for(int b = 1 ; b <= bi.m() ; ++b) {
-                A.set(bk(bsum+b),sp(1),v.A(N).real(sp(1),bi(b)));
-                A.set(bk(bsum+b),sp(2),v.A(N).real(sp(2),bi(b)));
+            T = v.A(N);
+            if(!(ci = findtype(T,Select))) {
+                ci = Index("dummy",1,Select);
+                T *= setElt(ci(1));
                 }
-            bsum += bi.m();
+            for(int n = 1 ; n <= int(ci) ; ++n)
+                for(int b = 1 ; b <= int(bi) ; ++b)
+                    for(int s = 1 ; s <= int(sp) ; ++s)
+                        A.set(vi(nsum+n),bk(bsum+b),sp(s),T.real(sp(s),bi(b),ci(n)));
+            bsum += int(bi);
+            nsum += int(ci);    
             }
-        V = ITensor(sp);
-        svdL(A,U,S,V,{"Cutoff",0.0});
+        U = Tensor(bk);
+        V = Tensor(vi,sp);
+        svdL(A,U,S,V,{"Cutoff",eps});
         inds.push_back(bk);
         ret.Aref(N) = V;
 
         // Do middle tensors
         for(int i = N-1 ; i > 1 ; --i) {
             int bm = 0;
-            for(auto& v : vecs) bm += leftLinkInd(v,i).m();
+            for(auto& v : vecs) bm += int(leftLinkInd(v,i));
             ak = inds.back();
-            bk = Index("link",bm);
+            bk = IndexT("li",bm);
             sp = hs.si(i);
-            A = ITensor(ak,bk,sp);
+            A = Tensor(ak,bk,sp);
             int asum = 0 , bsum = 0;
             for(auto& v : vecs) {
                 auto ai = rightLinkInd(v,i);
                 auto bi = leftLinkInd(v,i);
-                for(int a = 1 ; a <= ai.m() ; ++a)
-                    for(int b = 1 ; b <= bi.m() ; ++b) {
-                        A.set(ak(asum+a),bk(bsum+b),sp(1),v.A(i).real(sp(1),ai(a),bi(b)));
-                        A.set(ak(asum+a),bk(bsum+b),sp(2),v.A(i).real(sp(2),ai(a),bi(b)));
-                        }
-                asum += ai.m();
-                bsum += bi.m();
+                for(int a = 1 ; a <= int(ai) ; ++a)
+                    for(int b = 1 ; b <= int(bi) ; ++b)
+                        for(int s = 1 ; s <= int(sp) ; ++s)
+                            A.set(ak(asum+a),bk(bsum+b),sp(s),v.A(i).real(sp(s),ai(a),bi(b)));
+                asum += int(ai);
+                bsum += int(bi);
                 }
             A *= U*S;
-            V = ITensor(commonIndex(V,S),sp);
-            U = ITensor();
-            svdL(A,U,S,V,{"Cutoff",0.0});
+            U = Tensor(bk);
+            V = Tensor(commonIndex(S,V),sp);
+            svdL(A,U,S,V,{"Cutoff",eps});
             inds.push_back(bk);
             ret.Aref(i) = V;
             }
-        
-        // Do first tensor
-        vi = Index("ext",nvc,Select);
+       
+        // Do last tensor
         ak = inds.back();
         sp = hs.si(1);
-        A = ITensor(vi,ak,sp);
-        int asum = 0 , ct = 1;
+        A = Tensor(ak,sp);
+        int asum = 0;
         for(auto& v : vecs) {
             auto ai = rightLinkInd(v,1);
-            for(int a = 1 ; a <= ai.m() ; ++a) {
-                A.set(vi(ct),ak(asum+a),sp(1),v.A(1).real(sp(1),ai(a)));
-                A.set(vi(ct),ak(asum+a),sp(2),v.A(1).real(sp(2),ai(a)));
-                }
-            asum += ai.m();
-            ct++;
+            for(int a = 1 ; a <= int(ai) ; ++a)
+                for(int s = 1 ; s <= int(sp) ; ++s)
+                    A.set(ak(asum+a),sp(s),v.A(1).real(sp(s),ai(a)));
+            asum += int(ai);
             }
         A *= U*S;
         ret.Aref(1) = A;
-        regauge(ret,1,0.0);
-        }
+    } else if(lr == RIGHT) { 
+        // Do last tensor
+        int bm = 0;
+        for(auto& v : vecs) bm += int(rightLinkInd(v,1));
+        vi = Index("ext",nx,Select);
+        bk = IndexT("li",bm);
+        sp = hs.si(1);
+        Tensor A(vi,bk,sp);
+        int bsum = 0 , nsum = 0;
+        for(auto& v : vecs) {
+            auto bi = rightLinkInd(v,1);
+            T = v.A(1);
+            if(!(ci = findtype(T,Select))) {
+                ci = Index("dummy",1,Select);
+                T *= setElt(ci(1));
+                }
+            for(int n = 1 ; n <= int(ci) ; ++n)
+                for(int b = 1 ; b <= int(bi) ; ++b)
+                    for(int s = 1 ; s <= int(sp) ; ++s)
+                        A.set(vi(nsum+n),bk(bsum+b),sp(s),T.real(sp(s),bi(b),ci(n)));
+            bsum += int(bi);
+            nsum += int(ci);
+            }
+        U = Tensor(vi,sp);
+        V = Tensor(bk);
+        svdL(A,U,S,V,{"Cutoff",eps});
+        inds.push_back(bk);
+        ret.Aref(1) = U;
 
-    return; 
+        // Do middle tensors
+        for(int i = 2 ; i < N ; ++i) {
+            int bm = 0;
+            for(auto& v : vecs) bm += int(rightLinkInd(v,i));
+            ak = inds.back();
+            bk = IndexT("li",bm);
+            sp = hs.si(i);
+            A = Tensor(ak,bk,sp);
+            int asum = 0 , bsum = 0;
+            for(auto& v : vecs) {
+                auto ai = leftLinkInd(v,i);
+                auto bi = rightLinkInd(v,i);
+                for(int a = 1 ; a <= int(ai) ; ++a)
+                    for(int b = 1 ; b <= int(bi) ; ++b)
+                        for(int s = 1 ; s <= int(sp) ; ++s)
+                            A.set(ak(asum+a),bk(bsum+b),sp(s),v.A(i).real(sp(s),ai(a),bi(b)));
+                asum += int(ai);
+                bsum += int(bi);
+                }
+            A *= S*V;
+            U = Tensor(commonIndex(U,S),sp);
+            V = Tensor();
+            svdL(A,U,S,V,{"Cutoff",eps});
+            inds.push_back(bk);
+            ret.Aref(i) = U;
+            }
+        
+        // Do first tensor
+        ak = inds.back();
+        sp = hs.si(N);
+        A = Tensor(ak,sp);
+        int asum = 0;
+        for(auto& v : vecs) {
+            auto ai = leftLinkInd(v,N);
+            for(int a = 1 ; a <= int(ai) ; ++a)
+                for(int s = 1 ; s <= int(sp) ; ++s)
+                    A.set(ak(asum+a),sp(s),v.A(N).real(sp(s),ai(a)));
+            asum += int(ai);
+            }
+        A *= S*V;
+        ret.Aref(N) = A;
+        }
+    
+    regauge(ret,ss,{"Cutoff",eps});
+    return 1; 
     }
+template int combineMPS(const vector<MPS>& vecs , MPS& ret, int lr);
+//template int combineMPS(const vector<IQMPS>& vecs , IQMPS& ret, int lr);

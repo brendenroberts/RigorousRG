@@ -3,6 +3,17 @@
 // July 2017
 #include "rrg.h"
 
+void combineVectors(const vector<ITensor>& vecs , ITensor& ret) {
+    auto chi = commonIndex(ret,vecs[0]);
+    auto ext = uniqueIndex(ret,vecs[0],Select);
+    if(ext.m() != int(vecs.size())) Error("index/vector mismatch in combineVectors");
+
+    for(int i = 1 ; i <= chi.m() ; ++i)
+        for(int j = 1 ; j <= ext.m() ; ++j)
+            ret.set(chi(i),ext(j),vecs[j-1].real(chi(i)));
+
+    }
+
 template <class BigMatrixT, class Tensor> 
 Real davidsonT(BigMatrixT const& A, Tensor& phi, Args const& args) {
     auto v = std::vector<Tensor>(1);
