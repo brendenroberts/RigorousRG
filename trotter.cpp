@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "rrg.h"
 
 template<class Tensor>
@@ -9,54 +10,65 @@ Tensor applyGate(const Tensor a , const Tensor b) {
     }
 
 template<class Tensor>
-void applyToMPO(MPOt<Tensor>& eH , const SiteOp<Tensor>& T , int N , int first , Real err) {
+void applyToMPO(MPOt<Tensor>& eH , const SiteOp<Tensor>& T , int N , int first , int lr , Real err) {
     auto i = T.i;
-    eH.position(i,{"Cutoff",1e-20});
+    auto si = eH.sites().si(i);
+    
+    if(!first) eH.position(lr?i+1:i,{"Cutoff",1e-18});
     if(i != N) {
         Tensor U,S,V;
-        if(first || i == 1) U = Tensor(eH.sites().si(i),eH.sites().siP(i));
-        else U = Tensor(eH.sites().si(i),eH.sites().siP(i),leftLinkInd(eH,i));
-        //svdL(first?T.A:applyGate(eH.A(i)*eH.A(i+1),T.A),U,S,V,{"Cutoff",err});
-        //eH.Aref(i) = U;
-        //eH.Aref(i+1) = S*V;
-        eH.svdBond(i,first?T.A:applyGate(eH.A(i)*eH.A(i+1),T.A),Fromleft,{"Cutoff",err});
+        U = first || i == 1 ? Tensor(si,prime(si)) : Tensor(si,prime(si),leftLinkInd(eH,i));
+        svdL(first?T.A:applyGate(eH.A(i)*eH.A(i+1),T.A),U,S,V,{"Cutoff",err});
+        eH.Aref(i) =   lr ? U*S : U;
+        eH.Aref(i+1) = lr ? V : S*V;
         }
     else eH.Anc(i) = first?T.A:applyGate(eH.A(i),T.A);
+    
+    eH.leftLim(lr||i==N?i-1:i); 
+    eH.rightLim(lr||i==N?i+1:i+2); 
+
     return;
     }
 
+bool icomp(SiteOp<Tensor>& a , SiteOp<Tensor>& b) { return a.i < b.i; }
+
 template<class Tensor>
 void TrotterExp(MPOt<Tensor>& eH , double t , int M , vector<SiteOp<Tensor> >& terms , Real err) {
+    using SO = SiteOp<Tensor>;
     const SiteSet& hs = eH.sites();
-    vector<SiteOp<Tensor> > eHevn , eHodd , eH2odd;
+    vector<SO> eHevn , eHodd , eH2odd;
     int N = hs.N();
     Real tstep = 1.0/(t*(double)M);
-    int i,n;
 
+    struct lo { bool operator() (const SO& a , const SO& b) { return a.i < b.i; } } lo;
+    struct hi { bool operator() (const SO& a , const SO& b) { return a.i > b.i; } } hi;
+
+    // sort them first! then push in forward, reverse order
     for(const auto& it : terms) {
         if(!it.A) continue;
-        i = it.i;
+        int i = it.i;
         if(i%2) {
-             eHodd.push_back(SiteOp<Tensor>(i,expHermitian(-tstep*it.A)));
-            eH2odd.push_back(SiteOp<Tensor>(i,expHermitian(-0.5*tstep*it.A)));
+             eHodd.push_back(SO(i,expHermitian(-tstep*it.A)));
+            eH2odd.push_back(SO(i,expHermitian(-0.5*tstep*it.A)));
             }
-        else eHevn.push_back(SiteOp<Tensor>(i,expHermitian(-tstep*it.A)));
+        else eHevn.push_back(SO(i,expHermitian(-tstep*it.A)));
         } 
     
-    eH.position(1,{"Cutoff",1e-16});
-    eH.Aref(1) *= 1e10/norm(eH.A(1));
+    std::sort(eHodd.begin(),eHodd.end(),hi);
+    std::sort(eH2odd.begin(),eH2odd.end(),hi);
+    std::sort(eHevn.begin(),eHevn.end(),lo);
+
+    for(const auto& g : eH2odd) applyToMPO(eH,g,N,1,RIGHT,err);
     
-    for(const auto& g : eH2odd) applyToMPO(eH,g,N,1,err);
-    
-    for(n = 0 ; n < M ; ++n) {
-        for(const auto& g : eHevn) applyToMPO(eH,g,N,0,err);
-        if(n != M-1) for(const auto& g : eHodd) applyToMPO(eH,g,N,0,err); 
-        eH.Aref(N) *= 1e10/norm(eH.A(N));
+    for(int n = 0 ; n < M ; ++n) {
+        eH.Aref(1) *= 1e10/norm(eH.A(1));
+        for(const auto& g : eHevn) applyToMPO(eH,g,N,0,LEFT,err);
+        if(n != M-1) for(const auto& g : eHodd) applyToMPO(eH,g,N,0,RIGHT,err);
         }
     
-    for(const auto& g : eH2odd) applyToMPO(eH,g,N,0,err);
+    for(const auto& g : eH2odd) applyToMPO(eH,g,N,0,RIGHT,err);
     eH.Aref(1) *= 1e10/norm(eH.A(1));
-    
+ 
     return;
     }
 
@@ -64,13 +76,11 @@ template<class MPOType>
 void twoLocalTrotter(MPOType& eH , double t , int M , AutoMPO& ampo , Real err) {
     using Tensor = typename MPOType::TensorT;
     const auto& hs = eH.sites();
-    int N = hs.N();
+    int i , N = hs.N();
+    Tensor term;
  
     vector<SiteOp<Tensor> > tns(N);
-    
-    for(const HTerm& ht : ampo.terms()) {
-        Tensor term;
-        int i;
+    for(const auto& ht : ampo.terms()) {
         auto st = ht.ops;
         if(st.size() == 1) { // onsite term
             i = st[0].i;
@@ -86,7 +96,6 @@ void twoLocalTrotter(MPOType& eH , double t , int M , AutoMPO& ampo , Real err) 
         }
 
     TrotterExp(eH,t,M,tns,err);
-    eH.position(1,{"Cutoff",1e-16});
 
     return;
     }

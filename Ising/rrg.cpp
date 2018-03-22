@@ -9,7 +9,7 @@ int main(int argc, char *argv[]) {
     time_t t1,t2,tI,tF;
     Real delt;
     MPO rhoG,rhoGA;
-    ITensor U,Dg,G;
+    ITensor U,Dg,P,S;
     Index ei;
 
     // RRG structure parameters
@@ -20,7 +20,7 @@ int main(int argc, char *argv[]) {
     int          m  = 0;             // RG scale factor
 
     // AGSP and subspace parameters
-    const double t = 0.5;            // Trotter temperature
+    const double t = 0.4;            // Trotter temperature
     const int    M = 140;            // num Trotter steps
     const int    k = 1;              // power of Trotter op
     const int    s = atoi(argv[3]);  // formal s param
@@ -29,7 +29,7 @@ int main(int argc, char *argv[]) {
     // computational settings
     const int    e   = 2; // number of DMRG states to compute (should be 2)
     const int    doI = 1; // diag restricted Hamiltonian iteratively?
-    const int    doV = 0; // compute viability from DMRG gs?
+    const int    doV = 1; // compute viability from DMRG gs?
 
     // Hamitonian parameters
     const Real   J = 1.0;
@@ -38,7 +38,7 @@ int main(int argc, char *argv[]) {
 
     FILE *sxfl,*syfl,*szfl,*gsfl;
     char id[128],sxnm[256],synm[256],sznm[256],gsnm[256];
-    if(argc == 5) sprintf(id,"rrg-L%d-s%d-D%d-J%.2f-h%.2f-g%.2f",N,s,D,J,h,g);
+    if(argc == 5) sprintf(id,"rrg-L%d-s%d-D%d",N,s,D);
     else sprintf(id,"%s",argv[5]);
     strcat(sxnm,id); strcat(sxnm,"-sx.dat");
     strcat(synm,id); strcat(synm,"-sy.dat");
@@ -94,7 +94,7 @@ int main(int argc, char *argv[]) {
     auto H = toMPO<ITensor>(autoH,{"Exact",true});
     std::cout.rdbuf(out);
 
-    // use DMRG to find guess at gs energy, gap
+    // use DMRG to find guexs at gs energy, gap
     vector<MPS> evecs;
     for(int i = 0 ; i < e ; ++i) evecs.push_back(MPS(hs));    
     time(&t1);
@@ -123,18 +123,16 @@ int main(int argc, char *argv[]) {
     // bSpaceL or bSpaceR depending on how the merge will work
     vector<MPS> Spre;
     for(ll = 0 ; ll < N/n ; ll++) {
-        int ss = (ll%2 ? 1 : n); // site housing the dangling Select index
-        auto curSS = (ll%2 ? bSpaceR : bSpaceL);
-        ITensor P,S;
+        int xs = ll % 2 ? 1 : n; // site housing the dangling Select index
+        auto cur = ll % 2 ? bSpaceR : bSpaceL;
         Index si("ext",s,Select);
        
         // return orthonormal basis of eigenstates
-        auto Hproj = overlapT(curSS,Hs[0],curSS);
-        auto eigs = diagHermitian(-Hproj,P,S,{"Maxm",s});
-        curSS.Aref(ss) *= P*delta(commonIndex(P,S),si);
-        regauge(curSS,ss,0.0);
+        auto eigs = diagHermitian(-overlapT(cur,Hs[0],cur),P,S,{"Maxm",s});
+        cur.Aref(xs) *= P*delta(commonIndex(P,S),si);
+        regauge(cur,xs,{"Cutoff",1e-16});
 
-        Spre.push_back(curSS);
+        Spre.push_back(cur);
         }
     time(&t2);
     fprintf(stderr,"initialization: %.f s\n",difftime(t2,tI));
@@ -146,14 +144,14 @@ int main(int argc, char *argv[]) {
         auto hs = hsps[m];
         if(doV) rhoGA = MPO(hs);
         Spost.clear();
+        
         // EXPAND STEP: for each block, expand dimension of subspace with AGSP operators
         for(ll = 0 ; ll < N/w ; ++ll) {
-            MPO A(hs);
-            MPO Hc = Hs[m];
-            MPS pre = Spre[ll];
-            MPS ret(hs);
-            int ss = (ll%2 ? 1 : w);
-            auto pi = findtype(pre.A(ss),Select);
+            MPO A(hs),Hc = Hs[m];
+            MPS pre = Spre[ll],ret(hs);
+            auto xs = ll % 2 ? 1 : w;
+            auto pi = findtype(pre.A(xs),Select);
+            Real thr = 1e-8;
 
             // STEP 1: extract filtering operators A from AGSP K
             time(&t1);
@@ -161,9 +159,6 @@ int main(int argc, char *argv[]) {
             time(&t2);
             fprintf(stderr,"trunc AGSP: %.f s\n",difftime(t2,t1));
            
-            pre.position(ll%2?w:1,{"Cutoff",1e-16});
-            A.position(ll%2?w:1,{"Cutoff",1e-16});
-
             // STEP 2: expand subspace using the mapping A:pre->ret
             time(&t1);
             applyMPO(pre,A,ret,ll%2,{"Cutoff",eps,"Maxm",MAXBD});
@@ -171,22 +166,17 @@ int main(int argc, char *argv[]) {
             fprintf(stderr,"apply AGSP: %.f s\n",difftime(t2,t1));
             fprintf(stderr,"max m: %d\n",maxM(ret));
 
-            // rotate into principal components of subspace, possibly reducing dimension
+            // rotate into principal components of subspace, poxsibly reducing dimension
             // and stabilizing numerics, then store subspace in eigenbasis of block H,
-            // which is necessary for the iterative solver in the Merge step
-            G = overlapT(ret,ret);
-            ITensor P,S;
-            diagHermitian(G,U,Dg,{"Cutoff",eps});
+            // which is necexsary for the iterative solver in the Merge step
+            diagHermitian(overlapT(ret,ret),U,Dg,{"Cutoff",thr});
             ei = Index("ext",int(commonIndex(Dg,U)),Select);
             Dg.apply(invsqrt);
-            ret.Aref(ss) *= dag(U)*Dg*delta(prime(commonIndex(Dg,U)),ei);
-            regauge(ret,ss,eps);
+            ret.Aref(xs) *= dag(U)*Dg*delta(prime(commonIndex(Dg,U)),ei);
          
-            auto Hproj = overlapT(ret,Hs[m],ret);
-            auto eigs = diagHermitian(-Hproj,P,S);
-            ret.Aref(ss) *= P;
-            ret.Aref(ss) *= delta(commonIndex(P,S),ei);
-            regauge(ret,ss,eps);
+            auto eigs = diagHermitian(-overlapT(ret,Hs[m],ret),P,S);
+            ret.Aref(xs) *= P*delta(commonIndex(P,S),ei);
+            regauge(ret,xs,{"Cutoff",eps});
             
             if(doV) {
                 reducedDM(gs,rhoGA,w*ll+1);
@@ -208,7 +198,6 @@ int main(int argc, char *argv[]) {
             auto spR = Spost[ll+1];              // R subspace
             auto sL = findtype(spL.A(w),Select); // L dangling index
             auto sR = findtype(spR.A(1),Select); // R dangling index
-            ITensor P,P2;
             Index si("ext",s,Select);
             bool toobig = (int(sL)*int(sR) >= 15000);
 
@@ -220,7 +209,7 @@ int main(int argc, char *argv[]) {
                 auto C = combiner(sL,sR);
                 auto ci = findtype(C,Link);
                 vector<ITPair> Hp;
-                Real tol = (N/w > 2 ? 1e-7 : 1e-8);
+                Real tol = 1e-16;
 
                 Hp.push_back(ITPair(overlapT(spL,Hs[m],spL),delta(sR,prime(sR))));
                 Hp.push_back(ITPair(delta(sL,prime(sL)),overlapT(spR,Hs[m],spR)));
@@ -235,12 +224,10 @@ int main(int argc, char *argv[]) {
                 ARSymStdEig<Real, tensorProdH> tprob;
                 for(int i = 0 , nconv = 0 ; nconv < s ; ++i) {
                     if(i != 0) tol *= 1e1;
-                    tprob.DefineParameters(nn,s,&resH,&tensorProdH::MultMv,"SA", min(2*s,nn-1),tol,1000*s);
+                    tprob.DefineParameters(nn,s,&resH,&tensorProdH::MultMv,"SA", min(2*s,nn-1),tol,10000*s);
                     nconv = tprob.FindEigenvectors();
                     fprintf(stderr,"nconv = %d (tol %1.0e)\n",nconv,tol);
                     }
-                auto eigs2 = tprob.RawEigenvalues();
-                pvec(eigs2,s);
 
                 vector<Real> vdat;
                 vdat.reserve(s*nn);
@@ -251,9 +238,8 @@ int main(int argc, char *argv[]) {
                 vector<ITensor> ret;
                 ret.reserve(s);
                 for(int i = 0 ; i < s ; ++i) ret.push_back(setElt(ci(i+1)));
-                auto eigs = davidsonT(resH,ret,{"ErrGoal",tol,"MaxIter",100*s,"DebugLevel",-1});
+                davidsonT(resH,ret,{"ErrGoal",tol,"MaxIter",100*s,"DebugLevel",-1});
                 fprintf(stderr,"\n");
-                pvec(eigs,s);
                 P = ITensor(si,ci);
                 combineVectors(ret,P);
                 #endif
@@ -267,9 +253,8 @@ int main(int argc, char *argv[]) {
                     HH += ((spL.A(w)*delta(leftLinkInd(spL,w),prime(leftLinkInd(spL,w))))
                         *prime(spL.A(w))*bb.L)*(prime(spR.A(1))*bb.R
                         *(spR.A(1)*delta(rightLinkInd(spR,1),prime(rightLinkInd(spR,1)))));
-                auto eigs = diagHermitian(-HH,P,Dg,{"Maxm",s});
+                diagHermitian(-HH,P,Dg,{"Maxm",s});
                 fprintf(stderr,"\n");
-                pvec(eigs.eigs().data(),s);
                 P *= delta(commonIndex(P,Dg),si);
                 }
             // the following line can replace the entire above if/else block to randomly sample
@@ -286,15 +271,13 @@ int main(int argc, char *argv[]) {
             
             // orthogonalize viable set for next iteration, if ON basis needed 
             if(N/w > 2 && doV) {    
-                fprintf(stderr,"orth\n");
-                int ss = ((ll/2)%2 ? 1 : 2*w);
-                G = overlapT(ret,ret);
-                diagHermitian(G,U,Dg,{"Cutoff",eps});
-                Dg.apply(invsqrt);
-                ret.Aref(ss) *= U*Dg;
-                regauge(ret,ss);
+                int xs = (ll/2) % 2 ? 1 : 2*w;
+                diagHermitian(overlapT(ret,ret),U,Dg,{"Cutoff",eps});
                 ei = Index("ext",int(commonIndex(Dg,U)),Select);
-                ret.Aref(ss) *= delta(ei,prime(commonIndex(Dg,U)));
+                Dg.apply(invsqrt);
+                ret.Aref(xs) *= U*Dg;
+                ret.Aref(xs) *= delta(ei,prime(commonIndex(Dg,U)));
+                regauge(ret,xs,{"Cutoff",eps});
                 }
  
             Spre.push_back(ret);

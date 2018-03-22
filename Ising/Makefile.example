@@ -18,7 +18,6 @@ ifeq ($(NO_ARPACK),1)
 	../tensorProdH.cpp ../svdL.cpp ../davidson.cpp
     C2FLAGS= -I.. -Wno-unused-function
 else
-
     CCFILES=$(APP).cpp ../util.cpp ../trotter.cpp \
 	../tensorProdH.cpp ../svdL.cpp
     C2FLAGS= -I.. -larpack -I$(ARPACKPP_INC) \

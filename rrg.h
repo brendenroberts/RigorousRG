@@ -15,7 +15,7 @@
 #define LEFT   0
 #define RIGHT  1
 #define MAXBD  300
-#define MAXDIM 100000
+#define MAXDIM 50000
 
 using namespace itensor;
 using std::vector;
@@ -23,9 +23,9 @@ using std::min;
 using std::max;
 
 // "catchall" error threshold for most dangling-bond MPS/MPO operations
-const Real eps = 1E-11;
+const Real eps = 1E-10;
 // more sensitive threshold for single MPS or MPO
-const Real epx = 1E-16;
+const Real epx = 1E-14;
 
 const auto Select = IndexType("Select");
 struct getReal {};
@@ -135,19 +135,19 @@ ITensor measBd(const MPS& , const MPS& , const ITensor& , int);
 
 vector<Real> dmrgMPO(const MPO& , vector<MPS>& , int , double , double); 
 
-void restrictMPO(const MPO& , MPO& , int , int , int);
-
-template<class Tensor>
-void applyMPO(MPSt<Tensor> const& , MPOt<Tensor> const& , MPSt<Tensor>& , int , Args const&);
-
 ITensor overlapT(const MPS& , const MPO& , const MPS&);
 
 ITensor overlapT(const MPS& , const MPS&);
 
-void tensorProduct(const MPS& , const MPS& , MPS& , const ITensor& , int);
+double restrictMPO(const MPO& , MPO& , int , int , int);
 
 template<class Tensor>
-int combineMPS(const vector<MPSt<Tensor> >& , MPSt<Tensor>& , int);
+double applyMPO(MPSt<Tensor> const& , MPOt<Tensor> const& , MPSt<Tensor>& , int , Args const&);
+
+double tensorProduct(const MPS& , const MPS& , MPS& , const ITensor& , int);
+
+template<class Tensor>
+double combineMPS(const vector<MPSt<Tensor> >& , MPSt<Tensor>& , int);
 
 // trotter.cpp
 template<class MPOType>

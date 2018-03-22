@@ -71,7 +71,7 @@ int SVDRefImpl(MatRef<T> const& M,
         LAPACK_INT static call(LAPACK_INT M_ , LAPACK_INT N_ , LAPACK_INT P_ ,
             Real* Adata , Real* Sdata , Real* Udata , Real* Vdata) {
             LAPACK_INT LDA_=M_,LDU_=M_,LDVT_=P_;
-            if(min(M_,N_) <= 5000 && max(M_,N_) <= 20000)
+            if(min(M_,N_) <= 20000)// && max(M_,N_) <= 40000)
                 return LAPACKE_dgesdd(LAPACK_COL_MAJOR,'S',M_,N_,
                     Adata,LDA_,Sdata,Udata,LDU_,Vdata,LDVT_);
             Real superb[min(M_,N_)-1];
@@ -84,7 +84,7 @@ int SVDRefImpl(MatRef<T> const& M,
             auto pA = reinterpret_cast<LAPACK_COMPLEX*>(Adata); 
             auto pU = reinterpret_cast<LAPACK_COMPLEX*>(Udata); 
             auto pV = reinterpret_cast<LAPACK_COMPLEX*>(Vdata); 
-            if(min(M_,N_) <= int(5000/sqrt(2)) && max(M_,N_) <= int(20000/sqrt(2)))
+            if(min(M_,N_) <= 20000)// && max(M_,N_) <= int(40000/sqrt(2)))
                 return LAPACKE_zgesdd(LAPACK_COL_MAJOR,'S',M_,N_,
                     pA,LDA_,Sdata,pU,LDU_,pV,LDVT_);
             Real superb[min(M_,N_)-1];
@@ -159,14 +159,6 @@ SVDL(MatM && M,
         }
     resize(D,nsv);
     SVDRef(makeRef(M),makeRef(U),makeRef(D),makeRef(V),thresh);
- 
-//    if(isTransposed(M)) {
-//        U = subMatrix(U,0,nsv,0,Mr);
-//        reduceCols(V,nsv);
-//    } else {
-//        reduceCols(U,nsv);
-//        V = subMatrix(V,0,nsv,0,Mc);
-//        }       
     }
 
 template<typename T>
