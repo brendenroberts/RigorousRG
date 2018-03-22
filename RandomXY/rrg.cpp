@@ -270,6 +270,7 @@ int main(int argc, char *argv[]) {
                         *prime(spL.A(w))*bb.L)*(prime(spR.A(1))*bb.R
                         *(spR.A(1)*delta(rightLinkInd(spR,1),prime(rightLinkInd(spR,1)))));
                 diagHermitian(-HH,P,Dg,{"Maxm",s});
+                fprintf(stderr,"\n");
                 P *= delta(commonIndex(P,Dg),si);
                 }
             // the following line can replace the entire above if/else block to randomly sample
