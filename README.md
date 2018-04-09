@@ -5,4 +5,4 @@ To use: first, install ITensor (https://github.com/ITensor/ITensor). Then, enter
 
 To run RRG on a model, first modify the Makefile.example in the directory as needed. Next, make necessary changes to the top-level source files (e.g., modifying truncation tolerances in rrg.h). Further parameters may be changed in the .cpp source code in each directory, including Hamiltonian details and computational settings. Then in the model directory, make and run rrg without command-line arguments in order to see correct usage.
 
-Currently a particular nonintegrable Ising model and the disordered XY model are implemented.
+Currently the implemented models are a particular nonintegrable Ising model (which solves for ground- and low-energy states) and the disordered XY model (which focuses on resolving the gap).

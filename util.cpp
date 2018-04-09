@@ -46,10 +46,28 @@ void reducedDM(const MPS& psi , MPO& rho , int ls) {
     return;
     }
 
+ITensor overlapT(const MPS& phi, const MPO& H, const MPS& psi) {
+    auto N = H.N();
+    if(phi.N() != N || psi.N() != N) Error("overlap mismatched N");
+    auto lr = (findtype(phi.A(N),Select) ? LEFT : RIGHT);
+    ITensor L;
+
+    for(int i = 0; i < N; ++i) {
+        int x = (lr ? N-i : i+1);
+        L = i ? L*phi.A(x) : phi.A(x);
+        L *= H.A(x);
+        L *= dag(prime(psi.A(x)));
+        }
+    
+    return L;
+    }
+
+ITensor overlapT(const MPS& phi, const MPS& psi) { return overlapT(phi,sysOp(phi.sites(),"Id"),psi); }
+
 template<class MPSLike>
 void regauge(MPSLike& psi , int o, Args const& args) {
     psi.orthogonalize(args);
-    psi.position(o,args);
+    psi.position(o,{"Cutoff",1e-24});
 
     return;
     }
@@ -84,7 +102,7 @@ MPO sysOp(const SiteSet& hs, const char* op_name, const Real scale) {
 Real measOp(const MPS& state, const ITensor& A, int a, const ITensor& B, int b) {
     if(b <= a) Error("measOp requires a < b");
     auto psi = state;
-    psi.position(a,{"Cutoff",0.0});
+    psi.position(a,{"Cutoff",1e-24});
     
     auto C = psi.A(a)*A*dag(prime(psi.A(a),Site,commonIndex(psi.A(a),psi.A(a+1),Link)));
     for(int k = a+1; k < b; ++k) {
@@ -128,13 +146,38 @@ ITensor measBd(const MPS& psi, const MPS& phi, const ITensor& A, int lr) {
     return T;
     }
 
-vector<Real> dmrgMPO(const MPO& H , vector<MPS>& states , int num_sw , double penalty, double err) {
-    vector<Real> evals;
+template<typename Tensor>
+MPSt<Tensor> opFilter(MPSt<Tensor> const& st, vector<MPOt<Tensor> > const& ops, Real thr , int lr) {
+    using IndexT = typename Tensor::index_type;
+    int tr, ss = (lr ? 1 : st.N());
+    Tensor U,Dg,G;
+    IndexT fi;
+    auto ret = st;
+
+    for(auto& op : ops) {
+        G = overlapT(ret,op,ret);
+        auto vals = diagHermitian(G,U,Dg);
+        tr = 0; for(auto v : vals.eigs()) if(v > thr) tr++; else break;
+        if(tr > 0) {
+            fi = Index("ext",tr,Select);
+            ret.Aref(ss) *= dag(U)*Dg*delta(prime(commonIndex(U,Dg)),fi);
+        } else ret.Aref(ss).prime(Select);
+        }
+
+    return ret;
+    }
+template MPS opFilter(MPS const& , vector<MPO> const& , Real , int);
+
+vector<Real> dmrgMPO(const MPO& H , vector<MPS>& states , int num_sw, Args const& args) {
+    auto do_exclude = args.getBool("Exclude",true);
+    auto penalty = args.getReal("Penalty",1.0);
+    auto err = args.getReal("Cutoff",1e-16);
     vector<MPS> exclude;
-    Real e;
+    vector<Real> evals;
+    
     for(auto& psi : states) {
         auto swp = Sweeps(num_sw);
-        //swp.maxm() = 150,150,150,200,200,200;
+        //swp.maxm() = 100,150;
         swp.cutoff() = err;
         swp.niter() = 4;
         swp.noise() = 0.0;
@@ -142,11 +185,10 @@ vector<Real> dmrgMPO(const MPO& H , vector<MPS>& states , int num_sw , double pe
         // dmrg call won't shut up
         std::stringstream ss;
         auto out = std::cout.rdbuf(ss.rdbuf()); 
-        e = dmrg(psi,H,exclude,swp,{"Quiet",true,"PrintEigs",false,"Weight",penalty});
+        auto e = dmrg(psi,H,exclude,swp,{"Quiet",true,"PrintEigs",false,"Weight",penalty});
         std::cout.rdbuf(out);
 
-        if(exclude.size() == 0)
-            exclude.push_back(psi);
+        if(do_exclude) exclude.push_back(psi);
         evals.push_back(e);
         }
 
@@ -159,23 +201,21 @@ ITensor splitMPO(const MPO& O, MPO& P, int lr) {
     const auto HS = O.sites();
     const auto hs = P.sites();
     auto M = O;
-    int t = (lr ? N-n+1 : n);
-    ITensor U,S,V,R;
+    int t = lr ? N-n : n;
+    ITensor S,V;
     Index sp,sq,ai,ei;
 
     M.position(t,{"Cutoff",0.0});
-    int a[2] = {t-lr,t+1-lr};
-    auto B = M.A(a[0])*M.A(a[1]);
-    U = ITensor(HS.si(a[0]),HS.siP(a[0]),leftLinkInd(M,a[0]));
+    auto B = M.A(t)*M.A(t+1), U = M.A(t);
     svdL(B,U,S,V,{"Cutoff",0.0,"LeftIndexType",Select,"RightIndexType",Select});
-    R = (lr ? V : U);
-    sp = hs.si((lr ? 1 : n));
-    sq = HS.si(t);
-    P.Aref((lr ? 1 : n)) = R*delta(sp,sq)*delta(prime(sp),prime(sq));
+    auto R = lr ? V : U;
+    sp = hs.si(lr ? 1 : n);
+    sq = HS.si(lr ? t+1 : t);
+    P.Aref(lr ? 1 : n) = R*delta(sp,sq)*delta(prime(sp),prime(sq));
     
     for(int i = 1 ; i < n ; ++i) {
-        auto x = (lr ? i+1 : n-i); sp = hs.si(x);
-        auto y = (lr ? t+x-1 : x); sq = HS.si(y);
+        auto x = lr ? i+1 : n-i; sp = hs.si(x);
+        auto y = lr ? N-n+x : x; sq = HS.si(y);
         P.Aref(x) = M.A(y)*delta(sp,sq)*delta(prime(sp),prime(sq));
         }
     
@@ -207,14 +247,15 @@ double restrictMPO(const MPO& O , MPO& res , int ls , int D, int lr) {
     int rs = ls+n-1;
     time_t t1,t2;
     double ctime = 0.0;
-   
-    if(ls == 1) { // easy case: only dangling bond already at R end
+    
+    // easy case: one dangling bond already at correct end
+    if(ls == 1) {
         auto SS = splitMPO(M,res,LEFT);
         auto ei = Index("ext",min(D,int(findtype(res.A(n),Select))),Select);
         res.Aref(n) *= delta(ei,commonIndex(SS,res.A(n)));
         regauge(res,n,{"Cutoff",epx});
         return 0.0;
-    } else if(rs == N) { // easy case: only dangling bond already at L end
+    } else if(rs == N) {
         auto SS = splitMPO(M,res,RIGHT);
         auto ei = Index("ext",min(D,int(findtype(res.A(1),Select))),Select);
         res.Aref(1) *= delta(ei,commonIndex(SS,res.A(1)));
@@ -279,13 +320,13 @@ double restrictMPO(const MPO& O , MPO& res , int ls , int D, int lr) {
             V = ITensor();
             time(&t1);
             if(nels(B) < 1e7) {
-                denmatDecomp(B,U,V,Fromright,{"Cutoff",eps,"Maxm",MAXBD});
+                denmatDecomp(B,U,V,Fromright,{"Cutoff",eps*1e-2});
             } else {
-                svdL(B,U,S,V,{"Cutoff",eps,"Maxm",MAXBD});
+                svdL(B,U,S,V,{"Cutoff",eps*1e-2});
                 U *= S;
                 }
             time(&t2); ctime += difftime(t2,t1);
-            res.Aref(i) = U;
+            res.Aref(i) =   U;
             res.Aref(i+1) = V;
             }
     else
@@ -295,113 +336,107 @@ double restrictMPO(const MPO& O , MPO& res , int ls , int D, int lr) {
             V = ITensor(sub.si(i),sub.siP(i),lt,(i == n ? rt : rightLinkInd(res,i)));
             time(&t1);
             if(nels(B) < 1e7) {
-                denmatDecomp(B,U,V,Fromleft,{"Cutoff",eps,"Maxm",MAXBD});
+                denmatDecomp(B,U,V,Fromleft,{"Cutoff",eps*1e-2});
             } else {
-                svdL(B,U,S,V,{"Cutoff",eps,"Maxm",MAXBD});
+                svdL(B,U,S,V,{"Cutoff",eps*1e-2});
                 V *= S;
                 }
             time(&t2); ctime += difftime(t2,t1);
-                res.Aref(i-1) = U;
-                res.Aref(i) = V;
+            res.Aref(i-1) = U;
+            res.Aref(i) =   V;
             }
 
     res.Aref(lr?1:n) *= UU;
-    res.leftLim(lr?0:n-1);
-    res.rightLim(lr?2:n+1);
-    regauge(res,lr?1:n,{"Cutoff",eps});
+    regauge(res,lr?1:n,{"Cutoff",eps,"Maxm",MAXBD});
     
     return ctime; 
     }
 
 template<class Tensor>
-double applyMPO(MPSt<Tensor> const& psi_in, MPOt<Tensor> const& K_in, MPSt<Tensor>& res, int lr, Args const& args) {
-    using IndexT = typename Tensor::index_type;
-    auto psi = psi_in;
-    auto K = K_in;
+MPSt<Tensor> applyMPO(MPOt<Tensor> const& K, MPSt<Tensor> const& psi, int lr , Args const& args) {
+    auto cutoff = args.getReal("Cutoff",epx);
+    auto dargs = Args{"Cutoff",cutoff};
+    auto maxm_set = args.defined("Maxm");
+    if(maxm_set) dargs.add("Maxm",args.getInt("Maxm"));
+    auto verbose = args.getBool("Verbose",false);
+    auto siteType = getIndexType(args,"SiteType",Site);
+    auto linkType = getIndexType(args,"LinkType",Link);
+    int plev = 14741;
+    auto res = psi;
     auto N = psi.N();
-    if(K.N() != N) Error("Mismatched N in applyMPO");
-    auto trunK = args.getBool("TruncateMPO",false);
-    int xs = lr ? 1 : N , xt = lr ? N : 1;
-    time_t t1,t2;
-    double ctime = 0.0;
+    int xs = lr ? 1 : N;
+    int xt = lr ? N : 1;
 
-    vector<Index> ext;
-    if(findtype(psi.A(xs),Select)) ext.push_back(findtype(psi.A(xs),Select));
-    if(findtype(K.A(xs),Select)) ext.push_back(findtype(K.A(xs),Select));
-    res = psi; res.mapprime(0,1,Site);
-    if((int)ext.size() > 1) res.Aref(xs) *= setElt(ext[1](1));
-
-    psi.position(xs); K.position(xs);
-
-    Index iA,iK,iT;
-    Tensor clust,nfork,S,tA,tK;
-    for(int i = 0; i < N-1; i++) {
-        int x = (lr ? i+1 : N-i);
-        if(trunK) {
-            iT = lr ? leftLinkInd(K,x) : rightLinkInd(K,x);
-            tK = i != 0 && iT != iK ? delta(iK,iT)*K.A(x) : K.A(x);
-            tA = psi.A(x);
-        } else {
-            iT = lr ? leftLinkInd(psi,x) : rightLinkInd(psi,x);
-            tA = i != 0 && iT != iA ? delta(iA,iT)*psi.A(x) : psi.A(x);
-            tK = K.A(x);
-            }
-        iA = lr ? rightLinkInd(psi,x) : leftLinkInd(psi,x);
-        iK = lr ? rightLinkInd(K,x) : leftLinkInd(K,x);
- 
-        if(i == 0) clust = psi.A(x) * K.A(x);
-        else clust = int(iK) > int(iA) ? (nfork * tK) * tA : (nfork * tA) * tK;
-        if(i == N-2) break; //No need to SVD for i == N-1
-
-        if(int(iK)*int(iA) > MAXDIM) { // truncate bond for memory stability
-            auto newlink = Index("nl",MAXDIM/int(trunK?iA:iK),Link);
-            fprintf(stderr,"truncating %s bond %d->%d...\n",trunK?"MPO":"MPS",int(trunK?iK:iA),int(newlink));
-            clust *= delta(trunK?iK:iA,newlink);
-            (trunK?iK:iA) = newlink;
-            }
-        nfork = Tensor(iA,iK);
-        time(&t1);
-        denmatDecomp(clust,nfork,res.Anc(x),Fromright,args);
-        time(&t2); ctime += difftime(t2,t1);
-        IndexT mid = commonIndex(res.A(x),nfork,Link);
-        mid.dag();
-        if(lr)
-            res.Anc(x+1) = Tensor(mid,prime(res.sites()(x+1)));
-        else
-            res.Anc(x-1) = Tensor(mid,prime(res.sites()(x-1)));
+    //Set up conjugate psi and K
+    auto psic = psi;
+    auto Kc = K;
+    for(int j : range1(N)) {
+        //Modify prime levels of psic and Kc
+        //if(j == xs) {
+        //    auto ci = commonIndex(psi.A(xs),psi.A(lr?xs+1:xs-1),linkType);
+        //    psic.Aref(j) = dag(mapprime(psi.A(j),siteType,0,2,ci,0,plev));
+        //    ci = commonIndex(Kc.A(xs),Kc.A(lr?xs+1:xs-1),linkType);
+        //    Kc.Aref(j) = dag(mapprime(K.A(j),siteType,0,2,ci,0,plev));
+        //} else {
+            psic.Aref(j) = dag(mapprime(psi.A(j),siteType,0,2,linkType,0,plev));
+            Kc.Aref(j) = dag(mapprime(K.A(j),siteType,0,2,linkType,0,plev));
+        //    }
         }
-    nfork = clust * psi.A(xt) * K.A(xt);
 
-    time(&t1);
-    denmatDecomp(nfork,res.Aref(lr?xt-1:xt+1),res.Aref(xt),Fromleft,args);
-    time(&t2); ctime += difftime(t2,t1);
-    res.leftLim(xt-1);
-    res.rightLim(xt+1);
-    res.position(xs,{"Cutoff",eps});
-    if(ext.size() > 1) res.Aref(xs) *= combiner(ext,{"IndexType",Select});
-    res.mapprime(1,0,Site);
-
-    return ctime;
-    }
-template double applyMPO(const MPS& , const MPO& , MPS& , int , const Args&);
-
-ITensor overlapT(const MPS& phi, const MPO& H, const MPS& psi) {
-    auto N = H.N();
-    if(phi.N() != N || psi.N() != N) Error("overlap mismatched N");
-    auto lr = (findtype(phi.A(N),Select) ? LEFT : RIGHT);
-    ITensor L;
-
-    for(int i = 0; i < N; ++i) {
-        int x = (lr ? N-i : i+1);
-        L = i ? L*phi.A(x) : phi.A(x);
-        L *= H.A(x);
-        L *= dag(prime(psi.A(x)));
+    //Build environment tensors from the left/right
+    if(verbose) print("Building environment tensors...");
+    auto E = std::vector<Tensor>(N+1);
+    E.at(1) = psi.A(xs)*K.A(xs)*Kc.A(xs)*psic.A(xs);
+    for(int j = 2; j < N; ++j) {
+        int x = lr ? j : N+1-j;
+        E.at(j) = E.at(j-1)*psi.A(x)*K.A(x)*Kc.A(x)*psic.A(x);
+        assert(rank(E[j])==4);
         }
-    
-    return L;
-    }
+    if(verbose) println("done");
 
-ITensor overlapT(const MPS& phi, const MPS& psi) { return overlapT(phi,sysOp(phi.sites(),"Id"),psi); }
+    //O is the representation of the product of K*psi in the new MPS basis
+    auto O = psi.A(xt)*K.A(xt);
+    O.noprime(siteType);
+
+    auto rho = E.at(N-1) * O * dag(prime(O,plev));
+    Tensor U,D;
+    dargs.add("IndexName=",nameint("a",xt));
+    auto spec = diagHermitian(rho,U,D,dargs);
+    if(verbose) printfln("  j=%02d truncerr=%.2E m=%d",lr?xt-1:xt+1,spec.truncerr(),commonIndex(U,D).m());
+    res.Aref(xt) = dag(U);
+
+    O = O*U*psi.A(lr?xt-1:xt+1)*K.A(lr?xt-1:xt+1);
+    O.noprime(siteType);
+
+    for(int j = N-1; j > 1; --j) {
+        int x = lr ? j : N+1-j;
+        if(not maxm_set) {
+            //Infer maxm from bond dim of original MPS
+            //times bond dim of MPO
+            //i.e. upper bound on rank of rho
+            auto cip = commonIndex(psi.A(x),E.at(j-1));
+            auto ciw = commonIndex(K.A(x),E.at(j-1));
+            auto maxm = (cip) ? cip.m() : 1l;
+            maxm *= (ciw) ? ciw.m() : 1l;
+            dargs.add("Maxm",maxm);
+            }
+        rho = E.at(j-1) * O * dag(prime(O,plev));
+        dargs.add("IndexName=",nameint("a",x));
+        auto spec = diagHermitian(rho,U,D,dargs);
+        O = O*U*psi.A(lr?x-1:x+1)*K.A(lr?x-1:x+1);
+        O.noprime(siteType);
+        res.Aref(x) = dag(U);
+        if(verbose) printfln("  j=%02d truncerr=%.2E m=%d",x,spec.truncerr(),commonIndex(U,D).m());
+        }
+
+    res.Aref(xs) = O;
+    res.leftLim(xs-1);
+    res.rightLim(xs+1);
+
+    return res;
+    }
+template MPS applyMPO(MPO const&, MPS const&, int, Args const&);
+template IQMPS applyMPO(IQMPO const&, IQMPS const&, int, Args const&);
 
 double tensorProduct(const MPS& psiA, const MPS& psiB, MPS& ret, const ITensor& W, int lr) {
     const int N = ret.N();
@@ -417,34 +452,22 @@ double tensorProduct(const MPS& psiA, const MPS& psiB, MPS& ret, const ITensor& 
         ret.Aref(n+i) = psiB.A(i)*delta(psiB.sites().si(i),hs.si(n+i));
         }
 
-    ai = commonIndex(ret.A(n-1),ret.A(n));
-    T = lr ? (ret.A(n)*W)*ret.A(n+1) : ret.A(n)*(W*ret.A(n+1));
-    ei = findtype(T,Select);
-    U = lr && ei ? ITensor(hs.si(n),ai,ei) : ITensor(hs.si(n),ai);
-    time(&t1);
-    svdL(T,U,S,V,{"Cutoff",eps});
-    time(&t2); ctime += difftime(t2,t1);
-    ret.Aref(n)   = lr ? U : U*S;
-    ret.Aref(n+1) = lr ? S*V : V;
-    ret.leftLim(lr?n:n-1);
-    ret.rightLim(lr?n+2:n+1);
-    ret.position(lr?N:1,{"Cutoff",eps,"Maxm",MAXBD});
-    ret.position(lr?n:n+1,{"Cutoff",eps,"Maxm",MAXBD});
-
     // Move selection index from middle to edge
-    for(int i = 0 ; i < n-1 ; ++i) {
-        int x = (lr ? n-1-i : n+1+i);
+    for(int i = 0 ; i < n ; ++i) {
+        int x = (lr ? n-i : n+i);
         ai = commonIndex(ret.A(x-1),ret.A(x));
-        T = ret.A(x)*ret.A(x+1);
+        T = i == 0 ? ret.A(x)*W*ret.A(x+1) : ret.A(x)*ret.A(x+1);
+        if(i == 0) ei = findtype(T,Select);
         U = lr && ei ? ITensor(hs.si(x),ai,ei) : ITensor(hs.si(x),ai);
         time(&t1);
-        svdL(T,U,S,V,{"Cutoff",eps,"Maxm",MAXBD});
+        svdL(T,U,S,V,{"Cutoff",1e-16});
         time(&t2); ctime += difftime(t2,t1);
         ret.Aref(x)   = lr ? U*S : U;
         ret.Aref(x+1) = lr ? V : S*V;
-        ret.leftLim(lr?x-1:x);
-        ret.rightLim(lr?x+1:x+2);
+        //ret.leftLim(lr?x-1:x);
+        //ret.rightLim(lr?x+1:x+2);
         }
+    regauge(ret,lr?1:N,{"Cutoff",eps});
  
     return ctime; 
     }
@@ -466,11 +489,11 @@ double combineMPS(const vector<MPSt<Tensor> >& v_in , MPSt<Tensor>& ret, int lr)
         ctime += combineMPS(c,ret,lr);
         return ctime;
         }
-        
+    
     using IndexT = typename Tensor::index_type;
     const int N = ret.N();
     const auto& hs = ret.sites();
-    const int xs = (lr ? 1 : N);
+    const int xs = lr ? 1 : N;
     auto vecs = v_in;
     vector<IndexT> inds,ext;
     IndexT ak,bk,ci,vi,sp;
@@ -480,7 +503,7 @@ double combineMPS(const vector<MPSt<Tensor> >& v_in , MPSt<Tensor>& ret, int lr)
     int nx = 0;
     for(auto& v : vecs) {
         nx += (ci = findtype(v.A(xs),Select)) ? int(ci) : 1;
-        v.position(xs,{"Cutoff",1e-16});
+        v.position(xs,{"Cutoff",1e-24});
         }
 
     if(lr == LEFT) {
@@ -499,9 +522,9 @@ double combineMPS(const vector<MPSt<Tensor> >& v_in , MPSt<Tensor>& ret, int lr)
                 ci = Index("dummy",1,Select);
                 T *= setElt(ci(1));
                 }
-            for(int n = 1 ; n <= int(ci) ; ++n)
-                for(int b = 1 ; b <= int(bi) ; ++b)
-                    for(int s = 1 ; s <= int(sp) ; ++s)
+            for(int n : range1(int(ci)))
+                for(int b :range1(int(bi)))
+                    for(int s : range1(int(sp)))
                         A.set(vi(nsum+n),bk(bsum+b),sp(s),T.real(sp(s),bi(b),ci(n)));
             bsum += int(bi);
             nsum += int(ci);    
@@ -509,7 +532,7 @@ double combineMPS(const vector<MPSt<Tensor> >& v_in , MPSt<Tensor>& ret, int lr)
         U = Tensor(bk);
         V = Tensor(vi,sp);
         time(&t1);
-        svdL(A,U,S,V,{"Cutoff",eps});
+        svdL(A,U,S,V,{"Cutoff",1e-16});
         time(&t2); ctime += difftime(t2,t1);
         inds.push_back(bk);
         ret.Aref(N) = V;
@@ -537,7 +560,7 @@ double combineMPS(const vector<MPSt<Tensor> >& v_in , MPSt<Tensor>& ret, int lr)
             U = Tensor(bk);
             V = Tensor(commonIndex(S,V),sp);
             time(&t1);
-            svdL(A,U,S,V,{"Cutoff",eps});
+            svdL(A,U,S,V,{"Cutoff",1e-16});
             time(&t2); ctime += difftime(t2,t1);
             inds.push_back(bk);
             ret.Aref(i) = V;
@@ -583,7 +606,7 @@ double combineMPS(const vector<MPSt<Tensor> >& v_in , MPSt<Tensor>& ret, int lr)
         U = Tensor(vi,sp);
         V = Tensor(bk);
         time(&t1);
-        svdL(A,U,S,V,{"Cutoff",eps});
+        svdL(A,U,S,V,{"Cutoff",1e-16});
         time(&t2); ctime += difftime(t2,t1);
         inds.push_back(bk);
         ret.Aref(1) = U;
@@ -611,7 +634,7 @@ double combineMPS(const vector<MPSt<Tensor> >& v_in , MPSt<Tensor>& ret, int lr)
             U = Tensor(commonIndex(U,S),sp);
             V = Tensor();
             time(&t1);
-            svdL(A,U,S,V,{"Cutoff",eps});
+            svdL(A,U,S,V,{"Cutoff",1e-16});
             time(&t2); ctime += difftime(t2,t1);
             inds.push_back(bk);
             ret.Aref(i) = U;
@@ -632,11 +655,9 @@ double combineMPS(const vector<MPSt<Tensor> >& v_in , MPSt<Tensor>& ret, int lr)
         A *= S*V;
         ret.Aref(N) = A;
         }
-    ret.leftLim(lr?N-1:0);    
-    ret.rightLim(lr?N+1:2);    
 
     time(&t1);
-    ret.position(xs,{"Cutoff",eps,"Maxm",MAXBD});
+    regauge(ret,xs,{"Cutoff",eps});
     time(&t2); ctime += difftime(t2,t1);
     return ctime; 
     }

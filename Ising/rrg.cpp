@@ -20,14 +20,14 @@ int main(int argc, char *argv[]) {
     int          m  = 0;             // RG scale factor
 
     // AGSP and subspace parameters
-    const double t = 0.4;            // Trotter temperature
-    const int    M = 140;            // num Trotter steps
+    const double t = 0.5;            // Trotter temperature
+    const int    M = 120;             // num Trotter steps
     const int    k = 1;              // power of Trotter op
     const int    s = atoi(argv[3]);  // formal s param
     const int    D = atoi(argv[4]);  // formal D param
     
     // computational settings
-    const int    e   = 2; // number of DMRG states to compute (should be 2)
+    const int    e   = 2; // number of DMRG states to compute, e>2 may be slow
     const int    doI = 1; // diag restricted Hamiltonian iteratively?
     const int    doV = 1; // compute viability from DMRG gs?
 
@@ -94,30 +94,28 @@ int main(int argc, char *argv[]) {
     auto H = toMPO<ITensor>(autoH,{"Exact",true});
     std::cout.rdbuf(out);
 
-    // use DMRG to find guexs at gs energy, gap
+    // use DMRG to find guess at gs energy, gap
     vector<MPS> evecs;
     for(int i = 0 ; i < e ; ++i) evecs.push_back(MPS(hs));    
     time(&t1);
-    auto evals = dmrgMPO(H,evecs,9,10.0,1e-16);
+    auto evals = dmrgMPO(H,evecs,6,{"Penalty",10.0,"Cutoff",epx});
     time(&t2);
-    auto mn = std::distance(evals.begin(),std::min_element(evals.begin(),evals.end()));
-    auto gs = evecs[mn];
+    auto gs = evecs[0];
     fprintf(stderr,"DMRG BD ");
     for(const auto& it : evecs) fprintf(stderr,"%d ",maxM(it));
     fprintf(stderr,"\telapsed: %.f s\n",difftime(t2,t1));
-    fprintf(stderr,"gs: %17.14f gap: %10.9e\n",evals[mn],evals[1-mn]-evals[mn]);
+    fprintf(stderr,"gs: %17.14f gap: %10.9e\n",evals[0],evals[1]-evals[0]);
+    pvec(evals,e);
 
     // approximate the thermal operator exp(-H/t)^k using Trotter
-    // and MPO multiplication; temperature of K is k/t
+    // and MPO multiplication; temperature of K is t/k
     time(&tI);
-    MPO eH(hs);
-    twoLocalTrotter(eH,t,M,autoH,eps);
+    auto eH = toExpH<ITensor>(autoH,t/(double)M);
     auto K = eH;
-    for(int i = 1 ; i < k ; ++i) {
-        nmultMPO(eH,K,K,{"Cutoff",eps,"Maxm",MAXBD});
-        fprintf(stderr,"norm K: %e\n",norm(K.A(1)));
-        K.Aref(1) *= 1e10/norm(K.A(1));
-        } 
+    for(int i = 1 ; i < M ; ++i) {
+        nmultMPO(eH,K,K,{"Cutoff",epx});
+        K.Aref(1) *= 1.0/norm(K.A(1));
+        }
 
     // INITIALIZATION: reduce dimension by sampling from initial basis, either
     // bSpaceL or bSpaceR depending on how the merge will work
@@ -130,7 +128,7 @@ int main(int argc, char *argv[]) {
         // return orthonormal basis of eigenstates
         auto eigs = diagHermitian(-overlapT(cur,Hs[0],cur),P,S,{"Maxm",s});
         cur.Aref(xs) *= P*delta(commonIndex(P,S),si);
-        regauge(cur,xs,{"Cutoff",1e-16});
+        regauge(cur,xs,{"Cutoff",0.0});
 
         Spre.push_back(cur);
         }
@@ -151,44 +149,45 @@ int main(int argc, char *argv[]) {
             MPS pre = Spre[ll],ret(hs);
             auto xs = ll % 2 ? 1 : w;
             auto pi = findtype(pre.A(xs),Select);
-            Real thr = 1e-8;
+            Real thr = 1e-9;
 
             // STEP 1: extract filtering operators A from AGSP K
             time(&t1);
             restrictMPO(K,A,w*ll+1,D,ll%2);
             time(&t2);
             fprintf(stderr,"trunc AGSP: %.f s\n",difftime(t2,t1));
-           
+ 
             // STEP 2: expand subspace using the mapping A:pre->ret
             time(&t1);
-            applyMPO(pre,A,ret,ll%2,{"Cutoff",eps,"Maxm",MAXBD});
+            ret = applyMPO(A,pre,ll%2,{"Cutoff",eps,"Maxm",MAXBD});
+            ret.Aref(xs) *= combiner({findtype(pre.A(xs),Select),findtype(A.A(xs),Select)},{"IndexType",Select});
             time(&t2);
             fprintf(stderr,"apply AGSP: %.f s\n",difftime(t2,t1));
             fprintf(stderr,"max m: %d\n",maxM(ret));
 
-            // rotate into principal components of subspace, poxsibly reducing dimension
+            // rotate into principal components of subspace, possibly reducing dimension
             // and stabilizing numerics, then store subspace in eigenbasis of block H,
-            // which is necexsary for the iterative solver in the Merge step
+            // which is necessary for the iterative solver in the Merge step
             diagHermitian(overlapT(ret,ret),U,Dg,{"Cutoff",thr});
             ei = Index("ext",int(commonIndex(Dg,U)),Select);
             Dg.apply(invsqrt);
             ret.Aref(xs) *= dag(U)*Dg*delta(prime(commonIndex(Dg,U)),ei);
-         
+
             auto eigs = diagHermitian(-overlapT(ret,Hs[m],ret),P,S);
             ret.Aref(xs) *= P*delta(commonIndex(P,S),ei);
+            ret.Aref(xs) *= 1.0/sqrt(overlapT(ret,ret).real(ei(1),prime(ei)(1)));
             regauge(ret,xs,{"Cutoff",eps});
-            
+
             if(doV) {
                 reducedDM(gs,rhoGA,w*ll+1);
                 delt = (overlapT(pre,rhoGA,pre)*delta(pi,prime(pi))).real();
-                fprintf(stderr,"1-delta (pre): %e\n",max(eps,1.0-delt));
-                fprintf(stdout,"%18.15e,",max(eps,1.0-delt));
+                fprintf(stderr,"1-delta (pre): %.10e\n",1.0-delt);
                 delt = (overlapT(ret,rhoGA,ret)*delta(ei,prime(ei))).real();
-                fprintf(stderr,"1-delta (ret): %.10e\n",max(eps,1.0-delt));
-                fprintf(stdout,"%18.15e\n",max(eps,1.0-delt));
+                fprintf(stderr,"1-delta (ret): %.10e\n",1.0-delt);
                 }
             
             Spost.push_back(ret);
+
             }
 
         // MERGE/REDUCE STEP: construct tensor subspace, sample to reduce dimension
@@ -220,19 +219,17 @@ int main(int argc, char *argv[]) {
                 tensorProdH resH(Hp,C);
 
                 #ifdef USE_ARPACK                   
-                auto nn = int(ci);
+                auto nn = int(ci) , nev = min(s,int(ci)-2);
                 ARSymStdEig<Real, tensorProdH> tprob;
-                for(int i = 0 , nconv = 0 ; nconv < s ; ++i) {
-                    if(i != 0) tol *= 1e1;
-                    tprob.DefineParameters(nn,s,&resH,&tensorProdH::MultMv,"SA", min(2*s,nn-1),tol,10000*s);
-                    nconv = tprob.FindEigenvectors();
-                    fprintf(stderr,"nconv = %d (tol %1.0e)\n",nconv,tol);
-                    }
+                tprob.DefineParameters(nn,nev,&resH,&tensorProdH::MultMv,"SA", min(2*nev,nn-1),tol,5000*nev);
+                auto nconv = tprob.FindEigenvectors();
+                fprintf(stderr,"nconv = %d (tol %1.0e)\n",nconv,tol);
 
                 vector<Real> vdat;
-                vdat.reserve(s*nn);
+                vdat.reserve(nconv*nn);
                 auto vraw = tprob.RawEigenvectors();
-                vdat.assign(vraw,vraw+s*nn);
+                vdat.assign(vraw,vraw+nconv*nn);
+                if(nconv != s) si = Index("ext",nconv,Select);
                 P = ITensor({ci,si},Dense<Real>(std::move(vdat)));
                 #else
                 vector<ITensor> ret;
@@ -287,8 +284,8 @@ int main(int argc, char *argv[]) {
     // EXIT: extract two lowest energy candidate states to determine gap
     auto res = Spre[0];
     auto fi = findtype(res.A(N),Select);
-    vector<MPS> eigenstates(2);
-    for(int i = 1 ; i <= 2 ; ++i) {
+    vector<MPS> eigenstates(s);
+    for(int i : range1(s)) {
         auto fc = res;
         fc.Aref(N) *= setElt(fi(i));
         fc.orthogonalize({"Cutoff",epx,"Maxm",MAXBD});
@@ -304,20 +301,20 @@ int main(int argc, char *argv[]) {
     fprintf(stderr,"\telapsed: %.f s\n",difftime(tF,tI));
 
     // CLEANUP: use DMRG to improve discovered eigenstates
-    vector<Real> eigenvalues(2);
+    vector<Real> eigenvalues(s);
     time(&t1);
-    eigenvalues = dmrgMPO(H,eigenstates,9,10.0,1e-16);
+    eigenvalues = dmrgMPO(H,eigenstates,2,{"Penalty",10.0,"Cutoff",epx});
     time(&t2);
      
     fprintf(stderr,"DMRG BD ");
     for(const auto& it : eigenstates) fprintf(stderr,"%d ",maxM(it));
     fprintf(stderr,"\telapsed: %.f s\n",difftime(t2,t1));     
-    mn = std::distance(eigenvalues.begin(),std::min_element(eigenvalues.begin(),eigenvalues.end()));
 
-    auto gsR = eigenstates[mn];
-    fprintf(stderr,"gs: %17.14f gap: %10.9e\n",eigenvalues[mn],eigenvalues[1-mn]-eigenvalues[mn]);
+    pvec(eigenvalues,s);
+    auto gsR = eigenstates[0];
+    fprintf(stderr,"gs: %17.14f gap: %10.9e\n",eigenvalues[0],eigenvalues[1]-eigenvalues[0]);
     fprintf(gsfl,"# GS data (L=%d s=%d D=%d J=%.2f h=%.2f g=%.2f)\n",N,s,D,J,h,g);
-    fprintf(gsfl,"%17.14f\t%10.9e\n",eigenvalues[mn],eigenvalues[1-mn]-eigenvalues[mn]);
+    fprintf(gsfl,"%17.14f\t%10.9e\n",eigenvalues[0],eigenvalues[1]-eigenvalues[0]);
 
     // Compute two-point correlation functions in ground state via usual MPS method
     fprintf(sxfl,"# SxSx corr matrix (L=%d s=%d D=%d J=%.2f h=%.2f g=%.2f)\n",N,s,D,J,h,g);

@@ -3,8 +3,8 @@
 #include <random>
 
 int main(int argc, char *argv[]) {
-    if(argc != 6 && argc != 7) {
-        printf("usage: rrg N n s D seed (id_string)\n");
+    if(argc != 5 && argc != 6) {
+        printf("usage: rrg N n s D (id_string)\n");
         return 1;
         }
     time_t t1,t2,tI,tF;
@@ -19,25 +19,26 @@ int main(int argc, char *argv[]) {
     int          m  = 0;             // RG scale factor
 
     // AGSP and subspace parameters
-    const double t = 0.4;            // Trotter temperature
-    const int    M = 140;            // num Trotter steps
-    const int    k = 1;              // power of Trotter op (just use 1)
+    const double t = 0.5;            // Trotter temperature
+    const int    M = 120;            // num Trotter steps
+    //const int    k = 1;              // power of Trotter op (should be 1)
     const int    s = atoi(argv[3]);  // formal s param
     const int    D = atoi(argv[4]);  // formal D param
     
     // computational settings
-    const int    seed = atoi(argv[5]);
     const int    doI  = 1; // diag restricted Hamiltonian iteratively?
 
     // setup random sampling
+    std::random_device r;
+    const int seed = r();
     fprintf(stderr,"seed is %d\n",seed);
     std::mt19937 gen(seed);
     std::uniform_real_distribution<double> udist(0.0,1.0);
 
     FILE *sxfl,*syfl,*szfl,*gsfl;
     char id[128],sxnm[256],synm[256],sznm[256],gsnm[256];
-    if(argc == 6) sprintf(id,"rrg-L%d-s%d-D%d",N,s,D);
-    else sprintf(id,"%s",argv[6]);
+    if(argc == 5) sprintf(id,"rrg-L%d-s%d-D%d",N,s,D);
+    else sprintf(id,"%s",argv[5]);
     strcat(sxnm,id); strcat(sxnm,"-sx.dat");
     strcat(synm,id); strcat(synm,"-sy.dat");
     strcat(sznm,id); strcat(sznm,"-sz.dat");
@@ -132,16 +133,14 @@ int main(int argc, char *argv[]) {
         }   
  
     // approximate the thermal operator exp(-H/t)^k using Trotter
-    // and MPO multiplication; temperature of K is k/t
+    // and MPO multiplication; temperature of K is t/k
     time(&tI);
-    MPO eH(hs);
-    twoLocalTrotter(eH,t,M,autoH,eps);
+    auto eH = toExpH<ITensor>(autoH,t/(double)M);
     auto K = eH;
-    for(int i = 1 ; i < k ; ++i) {
-        nmultMPO(eH,K,K,{"Cutoff",eps,"Maxm",MAXBD});
-        fprintf(stderr,"norm K: %e\n",norm(K.A(1)));
-        K.Aref(1) *= 1e10/norm(K.A(1));
-        } 
+    for(int i = 1 ; i < M ; ++i) {
+        nmultMPO(eH,K,K,{"Cutoff",epx});
+        K.Aref(1) *= 1.0/norm(K.A(1));
+        }
 
     // INITIALIZATION: reduce dimension by sampling from initial basis, either
     // bSpaceL or bSpaceR depending on how the merge will work
@@ -184,28 +183,29 @@ int main(int argc, char *argv[]) {
            
             // STEP 2: expand subspace using the mapping A:pre->ret
             time(&t1);
-            applyMPO(pre,A,ret,ll%2,{"Cutoff",eps,"Maxm",MAXBD});
+            ret = applyMPO(A,pre,ll%2,{"Cutoff",eps,"Maxm",MAXBD});
+            ret.Aref(xs) *= combiner({findtype(pre.A(xs),Select),findtype(A.A(xs),Select)},{"IndexType",Select});
             time(&t2);
             fprintf(stderr,"apply AGSP: %.f s\n",difftime(t2,t1));
+            fprintf(stderr,"max m: %d\n",maxM(ret));
 
-            // rotate into principal components of subspace, poxsibly reducing dimension
+            // rotate into principal components of subspace, possibly reducing dimension
             // and stabilizing numerics, then store subspace in eigenbasis of block H,
-            // which is necexsary for the iterative solver in the Merge step
+            // which is necessary for the iterative solver in the Merge step
             time(&t1); 
             diagHermitian(overlapT(ret,ret),U,Dg,{"Cutoff",thr});
             time(&t2);
             ei = Index("ext",int(commonIndex(Dg,U)),Select);
             Dg.apply(invsqrt);
             ret.Aref(xs) *= dag(U)*Dg*delta(prime(commonIndex(Dg,U)),ei);
-            fprintf(stderr,"rotate MPS: %.f s\n",difftime(t2,t1));
 
             auto eigs = diagHermitian(-overlapT(ret,Hs[m][ll],ret),P,S);
-            ret.Aref(xs) *= P;
-            ret.Aref(xs) *= delta(commonIndex(P,S),ei);
+            ret.Aref(xs) *= P*delta(commonIndex(P,S),ei);
+            ret.Aref(xs) *= 1.0/sqrt(overlapT(ret,ret).real(ei(1),prime(ei)(1)));
             regauge(ret,xs,{"Cutoff",eps});
 
-            fprintf(stderr,"max m: %d\n",maxM(ret));
             Spost.push_back(ret);
+            
             }
 
         // MERGE/REDUCE STEP: construct tensor subspace, sample to reduce dimension
@@ -241,7 +241,7 @@ int main(int argc, char *argv[]) {
                 ARSymStdEig<Real, tensorProdH> tprob;
                 for(int i = 0 , nconv = 0 ; nconv < s ; ++i) {
                     if(i != 0) tol *= 1e1;
-                    tprob.DefineParameters(nn,s,&resH,&tensorProdH::MultMv,"SA", min(2*s,nn-1),tol,10000*s);
+                    tprob.DefineParameters(nn,s,&resH,&tensorProdH::MultMv,"SA", min(4*s,nn-1),tol,10000*s);
                     nconv = tprob.FindEigenvectors();
                     fprintf(stderr,"nconv = %d (tol %1.0e)\n",nconv,tol);
                     }
@@ -317,10 +317,10 @@ int main(int argc, char *argv[]) {
     time(&t2);
 
     Real vz,vx;
-    vz = overlap(evecs[0],prodSz[m],evecs[0]); vx = overlap(evecs[0],prodSx[m],evecs[0]);
-    fprintf(stderr,"Vz,vx of 0 is: %17.14f,%17.14f\n",vz,vx);
-    vz = overlap(evecs[1],prodSz[m],evecs[1]); vx = overlap(evecs[1],prodSx[m],evecs[1]);
-    fprintf(stderr,"Vz,vx of 1 is: %17.14f,%17.14f\n",vz,vx);
+    for(int i = 0 ; i < (int)evecs.size() ; ++i) {
+        vz = overlap(evecs[i],prodSz[m],evecs[i]); vx = overlap(evecs[i],prodSx[m],evecs[i]);
+        fprintf(stderr,"Vz,vx of %d is: %12.9f,%12.9f\n",i,vz,vx);
+        }
     int x1_up = (vx > 0.0 ? 1 : 0);
 
     evecs[0] = exactApplyMPO(evecs[0],projSzUp[m],{"Cutoff",epx});
@@ -342,7 +342,7 @@ int main(int argc, char *argv[]) {
         e_prev = evals;
 
         time(&t1);
-        evals = dmrgMPO(H,evecs,8,0.1,epx);
+        evals = dmrgMPO(H,evecs,max(2,N/16),{"Exclude",false,"Cutoff",epx});
         time(&t2);
         
         gap = evals[1]-evals[0];

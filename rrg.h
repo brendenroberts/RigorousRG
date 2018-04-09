@@ -6,7 +6,10 @@
 #undef F77NAME
 #endif
 
-#include "itensor/all_mps.h"
+#include "itensor/mps/sites/spinhalf.h"
+#include "itensor/mps/autompo.h"
+#include "itensor/mps/dmrg.h"
+#include "itensor/util/print_macro.h"
 #include <vector>
 #include <ctime>
 #include <cmath>
@@ -14,8 +17,8 @@
 
 #define LEFT   0
 #define RIGHT  1
-#define MAXBD  300
-#define MAXDIM 50000
+#define MAXBD  500
+#define args(x) range(x.size())
 
 using namespace itensor;
 using std::vector;
@@ -25,7 +28,7 @@ using std::max;
 // "catchall" error threshold for most dangling-bond MPS/MPO operations
 const Real eps = 1E-10;
 // more sensitive threshold for single MPS or MPO
-const Real epx = 1E-14;
+const Real epx = 2E-15;
 
 const auto Select = IndexType("Select");
 struct getReal {};
@@ -52,13 +55,12 @@ using RVPair = LRPair<vector<Real> >;
 // class used to interface with ARPACK++ or Davidson solver
 class tensorProdH {
 private:
-    vector<ITPair>      pairH;
-    vector<RVPair>      pHvec;
-    vector<RealPair>    pHscl;
+    vector<ITPair>   pairH;
+    vector<RVPair>   pHvec;
+    vector<RealPair> pHscl;
     ITensor C;
 
 public:
-    tensorProdH() { }
     tensorProdH(vector<ITPair> HH , ITensor CC)
         : pairH(HH) , pHvec() , pHscl() , C(CC) {
         pHvec.reserve(pairH.size());
@@ -78,8 +80,8 @@ public:
 // class used to interface with ARPACK++ in presence of symmetries
 class compositeH {
 private:
-    vector<IntPair>         dims;
-    vector<vector<RVPair> > dgData;
+    vector<IntPair>                  dims;
+    vector<vector<RVPair> >          dgData;
     vector<vector<vector<RVPair> > > bdData;
 
 public:
@@ -87,21 +89,8 @@ public:
     void MultMv(Real* v , Real* w);
 };
 
-// struct used to build MPO version of AGSP
-template<class Tensor>
-struct SiteOp
-{
-    int i;
-    Tensor A;
-    SiteOp() : i(0) {}
-    SiteOp(int ii , Tensor AA) : i(ii), A(AA) {}
-};
-template struct SiteOp<ITensor>;
-template struct SiteOp<IQTensor>;
-
 // utility functions for printing matrices and vectors to stderr
-inline void pvec(const double *vec, int n , int s = 0) {
-    if(s == 0) s = 1;
+inline void pvec(const double *vec, int n , int s = 1) {
     for(int i = 0 ; i < n*s ; i+=s) fprintf(stderr,"%17.14f\n",vec[i]);
     }
 
@@ -114,11 +103,15 @@ inline void pmat(const double *mat, int n , int m , int ld = 0) {
         }
     }
 
-inline void pvec(const vector<Real>& vec, int n, int s = 0) { pvec(&vec[0],n,s); }
+inline void pvec(const vector<Real>& vec, int n, int s = 1) { pvec(&vec[0],n,s); }
 inline void pmat(const vector<Real>& mat, int n, int m , int ld = 0) { pmat(&mat[0],n,m,ld); }
 
 // util.cpp
 void reducedDM(const MPS& , MPO& ,int);
+
+ITensor overlapT(const MPS& , const MPO& , const MPS&);
+
+ITensor overlapT(const MPS& , const MPS&);
 
 template<class MPSLike>
 void regauge(MPSLike& , int , Args const&);
@@ -133,36 +126,31 @@ Real measOp(const MPS& , const ITensor& , int);
 
 ITensor measBd(const MPS& , const MPS& , const ITensor& , int);
 
-vector<Real> dmrgMPO(const MPO& , vector<MPS>& , int , double , double); 
+template<typename Tensor>
+MPSt<Tensor> opFilter(MPSt<Tensor> const&, vector<MPOt<Tensor> > const&, Real , int);
 
-ITensor overlapT(const MPS& , const MPO& , const MPS&);
-
-ITensor overlapT(const MPS& , const MPS&);
+vector<Real> dmrgMPO(const MPO& , vector<MPS>& , int , Args const& = Args::global()); 
 
 double restrictMPO(const MPO& , MPO& , int , int , int);
 
 template<class Tensor>
-double applyMPO(MPSt<Tensor> const& , MPOt<Tensor> const& , MPSt<Tensor>& , int , Args const&);
+MPSt<Tensor> applyMPO(MPOt<Tensor> const& , MPSt<Tensor> const& , int , Args const& = Args::global());
 
 double tensorProduct(const MPS& , const MPS& , MPS& , const ITensor& , int);
 
 template<class Tensor>
 double combineMPS(const vector<MPSt<Tensor> >& , MPSt<Tensor>& , int);
 
-// trotter.cpp
-template<class MPOType>
-void twoLocalTrotter(MPOType& , double , int , AutoMPO& , Real);
-
 // svdL.cpp
 template<class Tensor>
-Spectrum svdL(Tensor , Tensor& , Tensor& , Tensor& , Args args);
+Spectrum svdL(Tensor , Tensor& , Tensor& , Tensor& , Args = Args::global());
 
 #ifndef USE_ARPACK
 // davidson.cpp
 void combineVectors(const vector<ITensor>& , ITensor&);
 
 template <class BigMatrixT , class Tensor>
-Real davidsonT(BigMatrixT const& , Tensor& , Args const& args);
+Real davidsonT(BigMatrixT const& , Tensor& , Args const& = Args::global());
 
 template <class BigMatrixT , class Tensor>
 vector<Real> davidsonT(BigMatrixT const& , vector<Tensor>& phi , Args const& args = Args::global());

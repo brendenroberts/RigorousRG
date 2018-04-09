@@ -14,12 +14,11 @@ HEADERS=../rrg.h
 #################################################################
 
 ifeq ($(NO_ARPACK),1)
-    CCFILES=$(APP).cpp ../util.cpp ../trotter.cpp \
-	../tensorProdH.cpp ../svdL.cpp ../davidson.cpp
+    CCFILES=$(APP).cpp ../util.cpp ../tensorProdH.cpp \
+	../svdL.cpp ../davidson.cpp
     C2FLAGS= -I.. -Wno-unused-function
 else
-    CCFILES=$(APP).cpp ../util.cpp ../trotter.cpp \
-	../tensorProdH.cpp ../svdL.cpp
+    CCFILES=$(APP).cpp ../util.cpp ../tensorProdH.cpp ../svdL.cpp
     C2FLAGS= -I.. -larpack -I$(ARPACKPP_INC) \
 	-Wno-unused-function -Wno-maybe-uninitialized -DUSE_ARPACK
 endif
