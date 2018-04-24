@@ -17,7 +17,7 @@
 
 #define LEFT   0
 #define RIGHT  1
-#define MAXBD  500
+#define MAXBD  800
 #define args(x) range(x.size())
 
 using namespace itensor;
@@ -28,7 +28,7 @@ using std::max;
 // "catchall" error threshold for most dangling-bond MPS/MPO operations
 const Real eps = 1E-10;
 // more sensitive threshold for single MPS or MPO
-const Real epx = 2E-15;
+const Real epx = 1E-14;
 
 const auto Select = IndexType("Select");
 struct getReal {};
@@ -55,22 +55,16 @@ using RVPair = LRPair<vector<Real> >;
 // class used to interface with ARPACK++ or Davidson solver
 class tensorProdH {
 private:
-    vector<ITPair>   pairH;
-    vector<RVPair>   pHvec;
-    vector<RealPair> pHscl;
-    ITensor C;
+    ITPair   ten;
+    RVPair   dat;
+    RealPair scl;
+    IntPair  dim;
 
 public:
-    tensorProdH(vector<ITPair> HH , ITensor CC)
-        : pairH(HH) , pHvec() , pHscl() , C(CC) {
-        pHvec.reserve(pairH.size());
-        pHscl.reserve(pairH.size());
-        for(auto& Hpair : pairH) {
-            pHvec.push_back(RVPair(doTask(getReal{},Hpair.L.store()),
-                                   doTask(getReal{},Hpair.R.store())));
-            pHscl.push_back(RealPair(Hpair.L.scale().real(),
-                                     Hpair.R.scale().real()));
-            }
+    tensorProdH(ITPair HH) : ten(HH) {
+        dat = RVPair(doTask(getReal{},ten.L.store()),doTask(getReal{},ten.R.store()));
+        scl = RealPair(ten.L.scale().real(),ten.R.scale().real());
+        dim = IntPair(int(findtype(ten.L,Select)),int(findtype(ten.R,Select)));
         }
     void product(const ITensor& A , ITensor& B) const;
     void MultMv(Real* v , Real* w);
@@ -90,24 +84,23 @@ public:
 };
 
 // utility functions for printing matrices and vectors to stderr
-inline void pvec(const double *vec, int n , int s = 1) {
+inline void pvec(const double *vec , int n , int s = 1) {
     for(int i = 0 ; i < n*s ; i+=s) fprintf(stderr,"%17.14f\n",vec[i]);
     }
 
-inline void pmat(const double *mat, int n , int m , int ld = 0) {
+inline void pmat(const double *mat , int n , int m , int ld = 0) {
     if(ld == 0) ld = m;
-    for(int i = 0 ; i < n ; ++i) {
-        for(int j = 0 ; j < m ; ++j)
-            fprintf(stderr,"%7.5f ",mat[i*ld+j]);
+    for(auto i : range(n)) {
+        for(auto j : range(m)) fprintf(stderr,"%7.5f ",mat[i*ld+j]);
         fprintf(stderr,"\n");
         }
     }
 
-inline void pvec(const vector<Real>& vec, int n, int s = 1) { pvec(&vec[0],n,s); }
-inline void pmat(const vector<Real>& mat, int n, int m , int ld = 0) { pmat(&mat[0],n,m,ld); }
+inline void pvec(const vector<Real>& vec , int n , int s = 1) { pvec(&vec[0],n,s); }
+inline void pmat(const vector<Real>& mat , int n , int m , int ld = 0) { pmat(&mat[0],n,m,ld); }
 
 // util.cpp
-void reducedDM(const MPS& , MPO& ,int);
+void reducedDM(const MPS& , MPO& , int);
 
 ITensor overlapT(const MPS& , const MPO& , const MPS&);
 
@@ -124,17 +117,24 @@ Real measOp(const MPS& , const ITensor& , int , const ITensor& , int);
 
 Real measOp(const MPS& , const ITensor& , int);
 
-ITensor measBd(const MPS& , const MPS& , const ITensor& , int);
+template<class Tensor>
+void extractBlocks(AutoMPO const& , vector<MPOt<Tensor> >& ,  const SiteSet&);
 
 template<typename Tensor>
-MPSt<Tensor> opFilter(MPSt<Tensor> const&, vector<MPOt<Tensor> > const&, Real , int);
+MPSt<Tensor> opFilter(MPSt<Tensor> const& , vector<MPOt<Tensor> > const& , Real , int);
 
 vector<Real> dmrgMPO(const MPO& , vector<MPS>& , int , Args const& = Args::global()); 
+
+template<class MPOType>
+void twoLocalTrotter(MPOType& , double , int , AutoMPO&); 
 
 double restrictMPO(const MPO& , MPO& , int , int , int);
 
 template<class Tensor>
 MPSt<Tensor> applyMPO(MPOt<Tensor> const& , MPSt<Tensor> const& , int , Args const& = Args::global());
+
+template<class Tensor>
+LRPair<Tensor> tensorProdContract(MPSt<Tensor> const&, MPSt<Tensor> const&, MPOt<Tensor> const&);
 
 double tensorProduct(const MPS& , const MPS& , MPS& , const ITensor& , int);
 
@@ -147,8 +147,6 @@ Spectrum svdL(Tensor , Tensor& , Tensor& , Tensor& , Args = Args::global());
 
 #ifndef USE_ARPACK
 // davidson.cpp
-void combineVectors(const vector<ITensor>& , ITensor&);
-
 template <class BigMatrixT , class Tensor>
 Real davidsonT(BigMatrixT const& , Tensor& , Args const& = Args::global());
 

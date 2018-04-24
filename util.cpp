@@ -1,4 +1,5 @@
 #include "rrg.h"
+#define T_TOL 1e-20
 
 int nels(const ITensor& A) {
     int n = 1;
@@ -124,28 +125,6 @@ Real measOp(const MPS& state, const ITensor& A, int a) {
     return C.real();
     }
 
-ITensor measBd(const MPS& psi, const MPS& phi, const ITensor& A, int lr) {
-    auto N = psi.N();
-    auto xs = lr ? 1 : N;
-    auto xt = lr ? N : 1;
-
-    if(findtype(psi.A(xs),Link) == findtype(phi.A(xs),Link))
-        return (psi.A(xs)*A)*primeExcept(psi.A(xs),Link);
-
-    ITensor T = psi.A(xt)*phi.A(xt);
-
-    for(int i = 1; i < N-1; i++) {
-        int x = (lr ? N-i : i+1);
-        T *= psi.A(x);
-        T *= phi.A(x);
-        }   
-    T *= psi.A(xs);
-    T *= A;
-    T *= primeExcept(phi.A(xs),Link);
-    
-    return T;
-    }
-
 template<typename Tensor>
 MPSt<Tensor> opFilter(MPSt<Tensor> const& st, vector<MPOt<Tensor> > const& ops, Real thr , int lr) {
     using IndexT = typename Tensor::index_type;
@@ -177,12 +156,11 @@ vector<Real> dmrgMPO(const MPO& H , vector<MPS>& states , int num_sw, Args const
     
     for(auto& psi : states) {
         auto swp = Sweeps(num_sw);
-        //swp.maxm() = 100,150;
+        swp.maxm() = 150,150,200,200;
         swp.cutoff() = err;
         swp.niter() = 4;
         swp.noise() = 0.0;
 
-        // dmrg call won't shut up
         std::stringstream ss;
         auto out = std::cout.rdbuf(ss.rdbuf()); 
         auto e = dmrg(psi,H,exclude,swp,{"Quiet",true,"PrintEigs",false,"Weight",penalty});
@@ -195,6 +173,70 @@ vector<Real> dmrgMPO(const MPO& H , vector<MPS>& states , int num_sw, Args const
     return evals;
     }
 
+template<class MPOType>
+void twoLocalTrotter(MPOType& eH , double t , int M , AutoMPO& ampo) {
+    using Tensor = typename MPOType::TensorT;
+    const auto& hs = eH.sites();
+    Tensor term;
+
+    AutoMPO Hevn(hs),Hodd(hs);
+    for(const auto& ht : ampo.terms()) {
+        auto st = ht.ops;
+        if(st.size() == 1) st[0].i%2==0?Hevn.add(ht):Hodd.add(ht);
+        else  min(st[0].i,st[1].i)%2==0?Hevn.add(ht):Hodd.add(ht);
+        }
+
+    auto Uevn  = toExpH<Tensor>(Hevn,t/(double)M);
+    auto Uodd  = toExpH<Tensor>(Hodd,t/(double)M);
+    auto Uodd2 = toExpH<Tensor>(Hodd,t/(2.0*(double)M));
+
+    auto evOp = Uodd2;
+    nmultMPO(evOp,Uevn,evOp,{"Truncate",false});
+    nmultMPO(evOp,Uodd2,evOp,{"Truncate",false});
+
+    eH = evOp;
+    for(int i : range(M-1)) {
+        nmultMPO(eH,evOp,eH,{"Cutoff",T_TOL});
+        eH.Aref(1) /= norm(eH.A(1));
+        (void)i;
+        }
+
+    return;
+    }
+template void twoLocalTrotter(MPO& eH , double t , int M , AutoMPO& ampo);
+template void twoLocalTrotter(IQMPO& eH , double t , int M , AutoMPO& ampo);
+
+template<class Tensor>
+void extractBlocks(AutoMPO const& H , vector<MPOt<Tensor> >& Hs , const SiteSet& HH) {
+    std::stringstream sts;
+    auto out = std::cout.rdbuf(sts.rdbuf()); 
+    
+    auto N = H.sites().N() , n = HH.N();
+    if(n == N) Hs.push_back(toMPO<Tensor>(H,{"Exact",true}));
+   
+    for(auto k : range(N/n)) {
+        AutoMPO Hcur(HH);
+        for(const auto& term : H.terms()) {
+            int mn = N, mx = 1;
+            for(const auto& op : term.ops) {
+                if(op.i > mx) mx = op.i;
+                if(op.i < mn) mn = op.i;
+                }
+            if(mn > k*n && mx <= (k+1)*n) {
+                auto tcur = term;
+                for(auto& op : tcur.ops) op.i -= k*n;
+                Hcur.add(tcur);
+                }
+            }
+        Hs.push_back(toMPO<Tensor>(Hcur,{"Exact",true}));
+        }
+    std::cout.rdbuf(out);
+
+    return;
+    }
+template void extractBlocks(AutoMPO const& , vector<MPO>& , const SiteSet&);
+template void extractBlocks(AutoMPO const& , vector<IQMPO>& , const SiteSet&);
+
 ITensor splitMPO(const MPO& O, MPO& P, int lr) {
     auto N = O.N();
     auto n = P.N();
@@ -205,9 +247,9 @@ ITensor splitMPO(const MPO& O, MPO& P, int lr) {
     ITensor S,V;
     Index sp,sq,ai,ei;
 
-    M.position(t,{"Cutoff",0.0});
+    M.position(t,{"Truncate",false});
     auto B = M.A(t)*M.A(t+1), U = M.A(t);
-    svdL(B,U,S,V,{"Cutoff",0.0,"LeftIndexType",Select,"RightIndexType",Select});
+    svdL(B,U,S,V,{"Truncate",false,"LeftIndexType",Select,"RightIndexType",Select});
     auto R = lr ? V : U;
     sp = hs.si(lr ? 1 : n);
     sq = HS.si(lr ? t+1 : t);
@@ -320,9 +362,9 @@ double restrictMPO(const MPO& O , MPO& res , int ls , int D, int lr) {
             V = ITensor();
             time(&t1);
             if(nels(B) < 1e7) {
-                denmatDecomp(B,U,V,Fromright,{"Cutoff",eps*1e-2});
+                denmatDecomp(B,U,V,Fromright,{"Cutoff",1e-16});
             } else {
-                svdL(B,U,S,V,{"Cutoff",eps*1e-2});
+                svdL(B,U,S,V,{"Cutoff",1e-16});
                 U *= S;
                 }
             time(&t2); ctime += difftime(t2,t1);
@@ -336,9 +378,9 @@ double restrictMPO(const MPO& O , MPO& res , int ls , int D, int lr) {
             V = ITensor(sub.si(i),sub.siP(i),lt,(i == n ? rt : rightLinkInd(res,i)));
             time(&t1);
             if(nels(B) < 1e7) {
-                denmatDecomp(B,U,V,Fromleft,{"Cutoff",eps*1e-2});
+                denmatDecomp(B,U,V,Fromleft,{"Cutoff",1e-16});
             } else {
-                svdL(B,U,S,V,{"Cutoff",eps*1e-2});
+                svdL(B,U,S,V,{"Cutoff",1e-16});
                 V *= S;
                 }
             time(&t2); ctime += difftime(t2,t1);
@@ -354,6 +396,7 @@ double restrictMPO(const MPO& O , MPO& res , int ls , int D, int lr) {
 
 template<class Tensor>
 MPSt<Tensor> applyMPO(MPOt<Tensor> const& K, MPSt<Tensor> const& psi, int lr , Args const& args) {
+    using IndexT = typename Tensor::index_type;
     auto cutoff = args.getReal("Cutoff",epx);
     auto dargs = Args{"Cutoff",cutoff};
     auto maxm_set = args.defined("Maxm");
@@ -371,16 +414,8 @@ MPSt<Tensor> applyMPO(MPOt<Tensor> const& K, MPSt<Tensor> const& psi, int lr , A
     auto psic = psi;
     auto Kc = K;
     for(int j : range1(N)) {
-        //Modify prime levels of psic and Kc
-        //if(j == xs) {
-        //    auto ci = commonIndex(psi.A(xs),psi.A(lr?xs+1:xs-1),linkType);
-        //    psic.Aref(j) = dag(mapprime(psi.A(j),siteType,0,2,ci,0,plev));
-        //    ci = commonIndex(Kc.A(xs),Kc.A(lr?xs+1:xs-1),linkType);
-        //    Kc.Aref(j) = dag(mapprime(K.A(j),siteType,0,2,ci,0,plev));
-        //} else {
-            psic.Aref(j) = dag(mapprime(psi.A(j),siteType,0,2,linkType,0,plev));
-            Kc.Aref(j) = dag(mapprime(K.A(j),siteType,0,2,linkType,0,plev));
-        //    }
+        psic.Aref(j) = dag(mapprime(psi.A(j),siteType,0,2,linkType,0,plev));
+        Kc.Aref(j) = dag(mapprime(K.A(j),siteType,0,2,linkType,0,plev));
         }
 
     //Build environment tensors from the left/right
@@ -430,6 +465,9 @@ MPSt<Tensor> applyMPO(MPOt<Tensor> const& K, MPSt<Tensor> const& psi, int lr , A
         }
 
     res.Aref(xs) = O;
+
+    auto px = findtype(psi.A(xs),Select) , Kx = findtype(K.A(xs),Select);
+    if(px && Kx) res.Aref(xs) *= combiner(vector<IndexT>({px,Kx}),{"IndexType",Select});
     res.leftLim(xs-1);
     res.rightLim(xs+1);
 
@@ -437,6 +475,28 @@ MPSt<Tensor> applyMPO(MPOt<Tensor> const& K, MPSt<Tensor> const& psi, int lr , A
     }
 template MPS applyMPO(MPO const&, MPS const&, int, Args const&);
 template IQMPS applyMPO(IQMPO const&, IQMPS const&, int, Args const&);
+
+template<class Tensor>
+LRPair<Tensor> tensorProdContract(MPSt<Tensor> const& psiL, MPSt<Tensor> const& psiR, MPOt<Tensor> const& H) {
+    auto N = H.N() , n = psiL.N();
+    if(n != N/2 || psiR.N() != n) Error("tensorProdContract mismatched N");
+    const auto& lsp = psiL.sites() , rsp = psiR.sites() , hsp = H.sites(); 
+    Tensor L,R;
+
+    for(int i = 0; i < n; ++i) {
+        int x = i+1 , y = N-i , z = n-i;
+        L = i ? L*psiL.A(x) : psiL.A(x);
+        R = i ? R*psiR.A(z) : psiR.A(z);
+        L *= H.A(x)*delta(lsp.si(x),hsp.si(x))*delta(lsp.siP(x),hsp.siP(x));
+        R *= H.A(y)*delta(rsp.si(z),hsp.si(y))*delta(rsp.siP(z),hsp.siP(y));
+        L *= dag(prime(psiL.A(x)));
+        R *= dag(prime(psiR.A(z)));
+        }
+    
+    return LRPair<Tensor>(L,R);
+    }
+template ITPair tensorProdContract(MPS const&, MPS const&, MPO const&);
+template IQTPair tensorProdContract(IQMPS const&, IQMPS const&, IQMPO const&);
 
 double tensorProduct(const MPS& psiA, const MPS& psiB, MPS& ret, const ITensor& W, int lr) {
     const int N = ret.N();
@@ -474,8 +534,9 @@ double tensorProduct(const MPS& psiA, const MPS& psiB, MPS& ret, const ITensor& 
 
 template<class Tensor> 
 double combineMPS(const vector<MPSt<Tensor> >& v_in , MPSt<Tensor>& ret, int lr) {
-    auto n = (int)v_in.size(); 
     double ctime = 0.0;
+/*
+    auto n = (int)v_in.size(); 
     if(n == 1) {
         ret = v_in[0];
         return ctime;
@@ -489,7 +550,7 @@ double combineMPS(const vector<MPSt<Tensor> >& v_in , MPSt<Tensor>& ret, int lr)
         ctime += combineMPS(c,ret,lr);
         return ctime;
         }
-    
+*/
     using IndexT = typename Tensor::index_type;
     const int N = ret.N();
     const auto& hs = ret.sites();
@@ -499,7 +560,24 @@ double combineMPS(const vector<MPSt<Tensor> >& v_in , MPSt<Tensor>& ret, int lr)
     IndexT ak,bk,ci,vi,sp;
     Tensor T,U,S,V;
     time_t t1,t2;
+/*
+    int ntot = 0 , nprev = 0;
+    for(auto& v : vecs) ntot += (ci = findtype(v.A(xs),Select)) ? int(ci) : 1;
+    auto ei = IndexT("ext",ntot,Select);
+    auto diag = vector<Real>(int(ei));
+    for(auto& v : vecs) {
+        Print("new v");
+        if(!(ci = findtype(v.A(xs),Select))) {v.Aref(xs) *= setElt(ei(++nprev)); Print(nprev);}
+        else {
+            std::fill(diag.begin(), diag.end(), 0.0);
+            for(int i = nprev ; i < nprev+int(ci) ; ++i) {Print(i+1); diag[i] = 1.0;}
+            v.Aref(xs) *= diagTensor(diag,ei,ci);
+            nprev += int(ci);
+            }
+        }
 
+    ret = sum(vecs,{"Cutoff",eps});
+*/
     int nx = 0;
     for(auto& v : vecs) {
         nx += (ci = findtype(v.A(xs),Select)) ? int(ci) : 1;

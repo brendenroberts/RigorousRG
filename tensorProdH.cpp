@@ -1,44 +1,21 @@
 #include "rrg.h"
 
 void tensorProdH::product(const ITensor& A, ITensor& B) const {
-    ITensor ret;
-    for(auto& Hpair : pairH) {
-        auto cur = A*C;
-        cur *= Hpair.L;
-        cur *= Hpair.R;
-        ret = (ret ? ret + noprime(cur)*C : noprime(cur)*C);
-        }
-
-    B = ret;
+    B = (dim.L > dim.R ? ten.L*(A*ten.R) : (ten.L*A)*ten.R).noprime(Select);
     return;
     }
 
 void tensorProdH::MultMv(Real* v, Real* w) {
-    auto l = int(findtype(pairH[0].L,Select));
-    auto r = int(findtype(pairH[0].R,Select));
-    Real *t = (Real *)malloc(l*r*sizeof(*t));
-    vector<Real> L,R;
-    int i = 0;
-
-    for(auto& Hpair : pHvec) {
-        L = Hpair.L;
-        R = Hpair.R;
-        
-        if(L.size() == 1)
-            cblas_dsymm(CblasColMajor,CblasRight,CblasUpper,l,r,pHscl[i].R,R.data(),r,v,l,(i?1.0:0.0),w,l);
-        else if(R.size() == 1)
-            cblas_dsymm(CblasColMajor, CblasLeft,CblasUpper,l,r,pHscl[i].L,L.data(),l,v,l,(i?1.0:0.0),w,l);
-        else {
-            cblas_dgemm(CblasColMajor,CblasNoTrans,CblasTrans,l,r,r,pHscl[i].R,v,l,R.data(),r,0.0,t,l);
-            cblas_dgemm(CblasColMajor,CblasNoTrans,CblasNoTrans,l,r,l,pHscl[i].L,L.data(),l,t,l,(i?1.0:0.0),w,l);
-            }
-        i++;
-        }
+    auto l = dim.L , r = dim.R , p = int(commonIndex(ten.L,ten.R,Link));
+    Real *t = (Real *)malloc(l*r*p*sizeof(*t));
+   
+    cblas_dgemm(CblasColMajor,CblasNoTrans,CblasNoTrans,l,r*p,r,scl.R,v,l,dat.R.data(),r,0.0,t,l);
+    cblas_dgemm(CblasColMajor,CblasTrans,CblasNoTrans,l,r,p*l,scl.L,dat.L.data(),p*l,t,p*l,0.0,w,l);
     
     free(t);
     return;
     }
 
 int tensorProdH::size() const {
-    return int(findtype(C,Link)); 
+    return dim.L*dim.R; 
     }
