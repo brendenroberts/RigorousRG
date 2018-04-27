@@ -1,11 +1,14 @@
 #include "rrg.h"
 #define T_TOL 1e-20
 
-int nels(const ITensor& A) {
+template<class Tensor>
+int nels(const Tensor& A) {
     int n = 1;
     for(const auto& i : A.inds()) n *= int(i);
     return n;
     }
+template int nels(const ITensor&);
+template int nels(const IQTensor&);
 
 void reducedDM(const MPS& psi , MPO& rho , int ls) {
     const auto& hs  = psi.sites();
@@ -47,11 +50,12 @@ void reducedDM(const MPS& psi , MPO& rho , int ls) {
     return;
     }
 
-ITensor overlapT(const MPS& phi, const MPO& H, const MPS& psi) {
+template<class Tensor>
+Tensor overlapT(const MPSt<Tensor>& phi, const MPOt<Tensor>& H, const MPSt<Tensor>& psi) {
     auto N = H.N();
     if(phi.N() != N || psi.N() != N) Error("overlap mismatched N");
     auto lr = (findtype(phi.A(N),Select) ? LEFT : RIGHT);
-    ITensor L;
+    Tensor L;
 
     for(int i = 0; i < N; ++i) {
         int x = (lr ? N-i : i+1);
@@ -62,24 +66,28 @@ ITensor overlapT(const MPS& phi, const MPO& H, const MPS& psi) {
     
     return L;
     }
+template ITensor overlapT(const MPS& , const MPO& , const MPS&);
+template IQTensor overlapT(const IQMPS& , const IQMPO& , const IQMPS&);
 
-ITensor overlapT(const MPS& phi, const MPS& psi) { return overlapT(phi,sysOp(phi.sites(),"Id"),psi); }
+ITensor overlapT(const MPS& phi, const MPS& psi) { return overlapT(phi,sysOp(phi.sites(),"Id").toMPO(),psi); }
+//IQTensor overlapT(const IQMPS& phi, const IQMPS& psi) { return overlapT(phi,sysOp(phi.sites(),"Id"),psi); }
 
 template<class MPSLike>
 void regauge(MPSLike& psi , int o, Args const& args) {
     psi.orthogonalize(args);
-    psi.position(o,{"Cutoff",1e-24});
+    psi.position(o,{"Cutoff",1e-16});
 
     return;
     }
 template void regauge(MPS& , int , Args const&);
 template void regauge(MPO& , int , Args const&);
 
-Real measEE(const MPS& state , int a) {
+template<class Tensor>
+Real measEE(const MPSt<Tensor>& state , int a) {
     auto psi = state;
     psi.position(a,{"Cutoff",0.0});
 
-    ITensor U = psi.A(a),S,V;
+    Tensor U = psi.A(a),S,V;
     auto spectrum = svd(U*psi.A(a+1),U,S,V);
 
     Real ret = 0.0;
@@ -87,20 +95,23 @@ Real measEE(const MPS& state , int a) {
     
     return ret;
     }
+template Real measEE(const MPS& , int);
+template Real measEE(const IQMPS& , int);
 
-MPO sysOp(const SiteSet& hs, const char* op_name, const Real scale) {
-    auto ret = MPO(hs);    
+IQMPO sysOp(const SiteSet& hs, const char* op_name, const Real scale) {
+    auto ret = IQMPO(hs);    
     auto N = hs.N();
 
     for(int i = 1 ; i <= N ; ++i) {
-        auto cur = scale*ITensor(hs.op(op_name,i));
+        auto cur = scale*IQTensor(hs.op(op_name,i));
         ret.Aref(i) = cur;
         }
 
     return ret;
     }
 
-Real measOp(const MPS& state, const ITensor& A, int a, const ITensor& B, int b) {
+template<class Tensor>
+Real measOp(const MPSt<Tensor>& state, const IQTensor& A, int a, const IQTensor& B, int b) {
     if(b <= a) Error("measOp requires a < b");
     auto psi = state;
     psi.position(a,{"Cutoff",1e-24});
@@ -117,13 +128,18 @@ Real measOp(const MPS& state, const ITensor& A, int a, const ITensor& B, int b) 
 
     return C.real();
     }
+template Real measOp(const MPS& , const IQTensor& , int , const IQTensor& , int);
+template Real measOp(const IQMPS& , const IQTensor& , int , const IQTensor& , int);
 
-Real measOp(const MPS& state, const ITensor& A, int a) {
+template<class Tensor>
+Real measOp(const MPSt<Tensor>& state, const IQTensor& A, int a) {
     auto psi = state;
     psi.position(a,{"Cutoff",0.0});
     auto C = psi.A(a)*A*dag(prime(psi.A(a),Site));
     return C.real();
     }
+template Real measOp(const MPS& , const IQTensor& , int);
+template Real measOp(const IQMPS& , const IQTensor& , int);
 
 template<typename Tensor>
 MPSt<Tensor> opFilter(MPSt<Tensor> const& st, vector<MPOt<Tensor> > const& ops, Real thr , int lr) {
@@ -147,11 +163,12 @@ MPSt<Tensor> opFilter(MPSt<Tensor> const& st, vector<MPOt<Tensor> > const& ops, 
     }
 template MPS opFilter(MPS const& , vector<MPO> const& , Real , int);
 
-vector<Real> dmrgMPO(const MPO& H , vector<MPS>& states , int num_sw, Args const& args) {
+template<class Tensor>
+vector<Real> dmrgMPO(const MPOt<Tensor>& H , vector<MPSt<Tensor> >& states , int num_sw, Args const& args) {
     auto do_exclude = args.getBool("Exclude",true);
     auto penalty = args.getReal("Penalty",1.0);
     auto err = args.getReal("Cutoff",1e-16);
-    vector<MPS> exclude;
+    vector<MPSt<Tensor> > exclude;
     vector<Real> evals;
     
     for(auto& psi : states) {
@@ -172,6 +189,8 @@ vector<Real> dmrgMPO(const MPO& H , vector<MPS>& states , int num_sw, Args const
 
     return evals;
     }
+template vector<Real> dmrgMPO(const MPO& , vector<MPS>& , int , Args const&);
+template vector<Real> dmrgMPO(const IQMPO& , vector<IQMPS>& , int , Args const&);
 
 template<class MPOType>
 void twoLocalTrotter(MPOType& eH , double t , int M , AutoMPO& ampo) {
@@ -237,15 +256,17 @@ void extractBlocks(AutoMPO const& H , vector<MPOt<Tensor> >& Hs , const SiteSet&
 template void extractBlocks(AutoMPO const& , vector<MPO>& , const SiteSet&);
 template void extractBlocks(AutoMPO const& , vector<IQMPO>& , const SiteSet&);
 
-ITensor splitMPO(const MPO& O, MPO& P, int lr) {
+template<class Tensor>
+Tensor splitMPO(const MPOt<Tensor>& O, MPOt<Tensor>& P, int lr) {
+    using IndexT = typename Tensor::index_type;
     auto N = O.N();
     auto n = P.N();
     const auto HS = O.sites();
     const auto hs = P.sites();
     auto M = O;
     int t = lr ? N-n : n;
-    ITensor S,V;
-    Index sp,sq,ai,ei;
+    Tensor S,V;
+    IndexT sp,sq;
 
     M.position(t,{"Truncate",false});
     auto B = M.A(t)*M.A(t+1), U = M.A(t);
@@ -263,6 +284,8 @@ ITensor splitMPO(const MPO& O, MPO& P, int lr) {
     
     return S;
     }
+template ITensor splitMPO(const MPO& , MPO& , int);
+template IQTensor splitMPO(const IQMPO& , IQMPO& , int);
 
 struct LRVal {
     Real val;
@@ -279,13 +302,14 @@ int argmax(vector<LRVal> vec) { return std::distance(vec.begin(),std::max_elemen
 int argmaxL(vector<LRVal> vec) { return std::distance(vec.begin(),std::max_element(vec.begin(),vec.end(),lcomp));}
 int argmaxR(vector<LRVal> vec) { return std::distance(vec.begin(),std::max_element(vec.begin(),vec.end(),rcomp));}
 
-double restrictMPO(const MPO& O , MPO& res , int ls , int D, int lr) {
+template<class Tensor>
+double restrictMPO(const MPOt<Tensor>& O , MPOt<Tensor>& res , int ls , int D, int lr) {
     auto N = O.N();
     auto n = res.N();
     if(N == n) {res = O; return 0.0;}
     const auto& sub = res.sites();
     auto M = O;
-    ITensor U,V,SB;
+    Tensor U,V,SB;
     int rs = ls+n-1;
     time_t t1,t2;
     double ctime = 0.0;
@@ -306,15 +330,15 @@ double restrictMPO(const MPO& O , MPO& res , int ls , int D, int lr) {
         }
 
     // setup for moving external bond to correct end 
-    ITensor SL,SR;
+    Tensor SL,SR;
     if(lr) {
         SpinHalf htmp(rs);
-        MPO tmp(htmp);
+        MPOt<Tensor> tmp(htmp);
         SR = splitMPO(M,tmp,LEFT);
         SL = splitMPO(tmp,res,RIGHT);
     } else {
         SpinHalf htmp(N-ls+1);
-        MPO tmp(htmp);
+        MPOt<Tensor> tmp(htmp);
         SL = splitMPO(M,tmp,RIGHT);
         SR = splitMPO(tmp,res,LEFT);
         }
@@ -323,9 +347,9 @@ double restrictMPO(const MPO& O , MPO& res , int ls , int D, int lr) {
     Index ri = commonIndex(SR,res.A(n));
 
     auto ldat = doTask(getReal{},SL.store());
-    cblas_dscal(int(li),SL.scale().real(),ldat.data(),1);
+    dscal_wrapper(int(li),SL.scale().real(),ldat.data());
     auto rdat = doTask(getReal{},SR.store());
-    cblas_dscal(int(ri),SR.scale().real(),rdat.data(),1);
+    dscal_wrapper(int(ri),SR.scale().real(),rdat.data());
 
     vector<LRVal> args,wk;
     args.reserve(D*D);
@@ -354,12 +378,12 @@ double restrictMPO(const MPO& O , MPO& res , int ls , int D, int lr) {
     res.Aref(1) *= delta(lt,li);
     res.Aref(n) *= delta(rt,ri);
 
-    ITensor S;
+    Tensor S;
     if(lr)
         for(int i = n-1 ; i >= 1 ; --i) {
             auto B = res.A(i)*res.A(i+1);
-            U = ITensor(sub.si(i),sub.siP(i),rt,(i == 1 ? lt : leftLinkInd(res,i)));
-            V = ITensor();
+            U = Tensor(sub.si(i),sub.siP(i),rt,(i == 1 ? lt : leftLinkInd(res,i)));
+            V = Tensor();
             time(&t1);
             if(nels(B) < 1e7) {
                 denmatDecomp(B,U,V,Fromright,{"Cutoff",1e-16});
@@ -374,8 +398,8 @@ double restrictMPO(const MPO& O , MPO& res , int ls , int D, int lr) {
     else
         for(int i = 2 ; i <= n ; ++i) {
             auto B = res.A(i-1)*res.A(i);
-            U = ITensor();
-            V = ITensor(sub.si(i),sub.siP(i),lt,(i == n ? rt : rightLinkInd(res,i)));
+            U = Tensor();
+            V = Tensor(sub.si(i),sub.siP(i),lt,(i == n ? rt : rightLinkInd(res,i)));
             time(&t1);
             if(nels(B) < 1e7) {
                 denmatDecomp(B,U,V,Fromleft,{"Cutoff",1e-16});
@@ -393,6 +417,8 @@ double restrictMPO(const MPO& O , MPO& res , int ls , int D, int lr) {
     
     return ctime; 
     }
+template double restrictMPO(const MPO& , MPO& , int , int , int);
+//template double restrictMPO(const IQMPO& , IQMPO& , int , int , int);
 
 template<class Tensor>
 MPSt<Tensor> applyMPO(MPOt<Tensor> const& K, MPSt<Tensor> const& psi, int lr , Args const& args) {
@@ -498,12 +524,13 @@ LRPair<Tensor> tensorProdContract(MPSt<Tensor> const& psiL, MPSt<Tensor> const& 
 template ITPair tensorProdContract(MPS const&, MPS const&, MPO const&);
 template IQTPair tensorProdContract(IQMPS const&, IQMPS const&, IQMPO const&);
 
-double tensorProduct(const MPS& psiA, const MPS& psiB, MPS& ret, const ITensor& W, int lr) {
+template<class Tensor>
+double tensorProduct(const MPSt<Tensor>& psiA, const MPSt<Tensor>& psiB, MPSt<Tensor>& ret, const Tensor& W, int lr) {
     const int N = ret.N();
     const int n = psiA.N();
     const auto& hs  = ret.sites();
     Index ai,ei;
-    ITensor T,U,S,V;
+    Tensor T,U,S,V;
     time_t t1,t2;
     double ctime = 0.0;
     
@@ -518,7 +545,7 @@ double tensorProduct(const MPS& psiA, const MPS& psiB, MPS& ret, const ITensor& 
         ai = commonIndex(ret.A(x-1),ret.A(x));
         T = i == 0 ? ret.A(x)*W*ret.A(x+1) : ret.A(x)*ret.A(x+1);
         if(i == 0) ei = findtype(T,Select);
-        U = lr && ei ? ITensor(hs.si(x),ai,ei) : ITensor(hs.si(x),ai);
+        U = lr && ei ? Tensor(hs.si(x),ai,ei) : Tensor(hs.si(x),ai);
         time(&t1);
         svdL(T,U,S,V,{"Cutoff",1e-16});
         time(&t2); ctime += difftime(t2,t1);
@@ -531,6 +558,8 @@ double tensorProduct(const MPS& psiA, const MPS& psiB, MPS& ret, const ITensor& 
  
     return ctime; 
     }
+template double tensorProduct(const MPS& , const MPS& , MPS& , const ITensor& , int);
+//template double tensorProduct(const IQMPS& , const IQMPS& , IQMPS& , const IQTensor& , int);
 
 template<class Tensor> 
 double combineMPS(const vector<MPSt<Tensor> >& v_in , MPSt<Tensor>& ret, int lr) {

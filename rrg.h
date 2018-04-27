@@ -102,20 +102,26 @@ inline void pmat(const vector<Real>& mat , int n , int m , int ld = 0) { pmat(&m
 // util.cpp
 void reducedDM(const MPS& , MPO& , int);
 
-ITensor overlapT(const MPS& , const MPO& , const MPS&);
+template<class Tensor>
+Tensor overlapT(const MPSt<Tensor>& , const MPOt<Tensor>& , const MPSt<Tensor>&);
 
+//template<class Tensor>
+//Tensor overlapT(const MPSt<Tensor>& , const MPSt<Tensor>&);
 ITensor overlapT(const MPS& , const MPS&);
 
 template<class MPSLike>
 void regauge(MPSLike& , int , Args const&);
 
-Real measEE(const MPS& , int);
+template<class Tensor>
+Real measEE(const MPSt<Tensor>& , int);
 
-MPO sysOp(const SiteSet& , const char* , const Real = 1.0);
+IQMPO sysOp(const SiteSet& , const char* , const Real = 1.0);
 
-Real measOp(const MPS& , const ITensor& , int , const ITensor& , int);
+template<class Tensor>
+Real measOp(const MPSt<Tensor>& , const IQTensor& , int , const IQTensor& , int);
 
-Real measOp(const MPS& , const ITensor& , int);
+template<class Tensor>
+Real measOp(const MPSt<Tensor>& , const IQTensor& , int);
 
 template<class Tensor>
 void extractBlocks(AutoMPO const& , vector<MPOt<Tensor> >& ,  const SiteSet&);
@@ -123,12 +129,14 @@ void extractBlocks(AutoMPO const& , vector<MPOt<Tensor> >& ,  const SiteSet&);
 template<typename Tensor>
 MPSt<Tensor> opFilter(MPSt<Tensor> const& , vector<MPOt<Tensor> > const& , Real , int);
 
-vector<Real> dmrgMPO(const MPO& , vector<MPS>& , int , Args const& = Args::global()); 
+template<class Tensor>
+vector<Real> dmrgMPO(const MPOt<Tensor>& , vector<MPSt<Tensor> >& , int , Args const& = Args::global()); 
 
 template<class MPOType>
 void twoLocalTrotter(MPOType& , double , int , AutoMPO&); 
 
-double restrictMPO(const MPO& , MPO& , int , int , int);
+template<class Tensor>
+double restrictMPO(const MPOt<Tensor>& , MPOt<Tensor>& , int , int , int);
 
 template<class Tensor>
 MPSt<Tensor> applyMPO(MPOt<Tensor> const& , MPSt<Tensor> const& , int , Args const& = Args::global());
@@ -136,7 +144,8 @@ MPSt<Tensor> applyMPO(MPOt<Tensor> const& , MPSt<Tensor> const& , int , Args con
 template<class Tensor>
 LRPair<Tensor> tensorProdContract(MPSt<Tensor> const&, MPSt<Tensor> const&, MPOt<Tensor> const&);
 
-double tensorProduct(const MPS& , const MPS& , MPS& , const ITensor& , int);
+template<class Tensor>
+double tensorProduct(const MPSt<Tensor>& , const MPSt<Tensor>& , MPSt<Tensor>& , const Tensor& , int);
 
 template<class Tensor>
 double combineMPS(const vector<MPSt<Tensor> >& , MPSt<Tensor>& , int);

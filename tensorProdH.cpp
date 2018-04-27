@@ -9,8 +9,8 @@ void tensorProdH::MultMv(Real* v, Real* w) {
     auto l = dim.L , r = dim.R , p = int(commonIndex(ten.L,ten.R,Link));
     Real *t = (Real *)malloc(l*r*p*sizeof(*t));
    
-    cblas_dgemm(CblasColMajor,CblasNoTrans,CblasNoTrans,l,r*p,r,scl.R,v,l,dat.R.data(),r,0.0,t,l);
-    cblas_dgemm(CblasColMajor,CblasTrans,CblasNoTrans,l,r,p*l,scl.L,dat.L.data(),p*l,t,p*l,0.0,w,l);
+    gemm_wrapper(false,false,l,r*p,r,scl.R,v,dat.R.data(),0.0,t);
+    gemm_wrapper(true ,false,l,r,p*l,scl.L,dat.L.data(),t,0.0,w);
     
     free(t);
     return;

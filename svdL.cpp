@@ -1,5 +1,4 @@
 #include "rrg.h"
-#include <lapacke.h>
 #include <limits>
 #include <tuple>
 #include <stdexcept>
@@ -13,6 +12,65 @@ using std::move;
 using std::tie;
 using std::make_tuple;
 using std::tuple;
+
+LAPACK_INT thin_svd(LAPACK_INT m, LAPACK_INT n, LAPACK_REAL *A, LAPACK_REAL *S, LAPACK_REAL *U, LAPACK_REAL *Vt) {
+    vector<LAPACK_REAL> work;
+    vector<LAPACK_INT> iwork;
+    LAPACK_INT l = min(m,n) , info = 0 , lwork;
+    bool dd = l <= 25000;
+    if(dd) iwork.resize(8*l);
+    char jobz = 'S';
+
+#ifdef PLATFORM_acml
+    lwork = 4*l*l+7*l;
+    work.resize(lwork+2);
+    if(dd) F77NAME(dgesdd)(&jobz,&m,&n,A,&m,S,U,&m,Vt,&l,work.data(),&lwork,iwork.data(),&info,1);
+    else   F77NAME(dgesvd)(&jobz,&jobz,&m,&n,A,&m,S,U,&m,Vt,&l,work.data(),&lwork,&info,1);
+#else
+    lwork = -1;
+    LAPACK_REAL wkopt;
+    if(dd) F77NAME(dgesdd)(&jobz,&m,&n,A,&m,S,U,&m,Vt,&l,&wkopt,&lwork,iwork.data(),&info);
+    else   F77NAME(dgesvd)(&jobz,&jobz,&m,&n,A,&m,S,U,&m,Vt,&l,&wkopt,&lwork,&info);
+    lwork = LAPACK_INT(wkopt);
+    work.resize(lwork+2);
+    if(dd) F77NAME(dgesdd)(&jobz,&m,&n,A,&m,S,U,&m,Vt,&l,work.data(),&lwork,iwork.data(),&info);
+    else   F77NAME(dgesvd)(&jobz,&jobz,&m,&n,A,&m,S,U,&m,Vt,&l,work.data(),&lwork,&info);
+#endif
+    return info;
+    }
+
+LAPACK_INT thin_svd(LAPACK_INT m, LAPACK_INT n, Cplx *A, LAPACK_REAL *S, Cplx *U, Cplx *Vt) {
+    std::vector<LAPACK_COMPLEX> work;
+    std::vector<LAPACK_REAL> rwork;
+    std::vector<LAPACK_INT> iwork;
+    LAPACK_INT l = min(m,n) , info = 0 , lwork , lrwork;
+    bool dd = l <= 25000;
+    lrwork = max(m,n) > 10*l ? 5*l*l+5*l : max(5*l*l+5*l , 2*max(m,n)*l+2*l*l+l);
+    rwork.resize(lrwork+2);
+    if(dd) iwork.resize(8*l);
+    char jobz = 'S';
+
+    auto pA = reinterpret_cast<LAPACK_COMPLEX*>(A);
+    auto pU = reinterpret_cast<LAPACK_COMPLEX*>(U);
+    auto pV = reinterpret_cast<LAPACK_COMPLEX*>(Vt);
+
+#ifdef PLATFORM_acml
+    lwork = l*l+3*l;
+    work.resize(lwork+2);
+    if(dd) F77NAME(zgesdd)(&jobz,&m,&n,pA,&m,S,pU,&m,pV,&l,work.data(),&lwork,rwork.data(),iwork.data(),&info,1);
+    else F77NAME(zgesvd)(&jobz,&jobz,&m,&n,pA,&m,S,pU,&m,pV,&l,work.data(),&lwork,rwork.data(),&info,1);
+#else
+    lwork = -1;
+    LAPACK_COMPLEX wkopt;
+    if(dd) F77NAME(zgesdd)(&jobz,&m,&n,pA,&m,S,pU,&m,pV,&l,&wkopt,&lwork,rwork.data(),iwork.data(),&info);
+    else F77NAME(zgesvd)(&jobz,&jobz,&m,&n,pA,&m,S,pU,&m,pV,&l,&wkopt,&lwork,rwork.data(),&info);
+    lwork = LAPACK_INT(wkopt.real);
+    work.resize(lwork+2);
+    if(dd) F77NAME(zgesdd)(&jobz,&m,&n,pA,&m,S,pU,&m,pV,&l,work.data(),&lwork,rwork.data(),iwork.data(),&info);
+    else F77NAME(zgesvd)(&jobz,&jobz,&m,&n,pA,&m,S,pU,&m,pV,&l,work.data(),&lwork,rwork.data(),&info);
+#endif
+    return info;
+    }
 
 template<typename V>
 struct ToMatRef
@@ -65,39 +123,10 @@ int SVDRefImpl(MatRef<T> const& M,
     {
     auto Mr = nrows(M), 
          Mc = ncols(M);
-    auto nsv = min(Mr,Mc);
 
-    struct SVD {
-        LAPACK_INT static call(LAPACK_INT M_ , LAPACK_INT N_ , LAPACK_INT P_ ,
-            Real* Adata , Real* Sdata , Real* Udata , Real* Vdata) {
-            LAPACK_INT LDA_=M_,LDU_=M_,LDVT_=P_;
-            if(min(M_,N_) <= 20000)// && max(M_,N_) <= 40000)
-                return LAPACKE_dgesdd(LAPACK_COL_MAJOR,'S',M_,N_,
-                    Adata,LDA_,Sdata,Udata,LDU_,Vdata,LDVT_);
-            Real superb[min(M_,N_)-1];
-            return LAPACKE_dgesvd(LAPACK_COL_MAJOR,'S','S',M_,N_,
-                    Adata,LDA_,Sdata,Udata,LDU_,Vdata,LDVT_,superb);
-            }
-        LAPACK_INT static call(LAPACK_INT M_ , LAPACK_INT N_ , LAPACK_INT P_ ,
-            Cplx* Adata , Real* Sdata , Cplx* Udata , Cplx* Vdata) {
-            LAPACK_INT LDA_=M_,LDU_=M_,LDVT_=P_;
-            auto pA = reinterpret_cast<LAPACK_COMPLEX*>(Adata); 
-            auto pU = reinterpret_cast<LAPACK_COMPLEX*>(Udata); 
-            auto pV = reinterpret_cast<LAPACK_COMPLEX*>(Vdata); 
-            if(min(M_,N_) <= 20000)// && max(M_,N_) <= int(40000/sqrt(2)))
-                return LAPACKE_zgesdd(LAPACK_COL_MAJOR,'S',M_,N_,
-                    pA,LDA_,Sdata,pU,LDU_,pV,LDVT_);
-            Real superb[min(M_,N_)-1];
-            return LAPACKE_zgesvd(LAPACK_COL_MAJOR,'S','S',M_,N_,
-                    pA,LDA_,Sdata,pU,LDU_,pV,LDVT_,superb);
-            }
-        };
-    
     LAPACK_INT info;
-    if(isTransposed(M))
-        info = SVD::call(Mc,Mr,nsv,M.data(),D.data(),V.data(),U.data());
-    else
-        info = SVD::call(Mr,Mc,nsv,M.data(),D.data(),U.data(),V.data());
+    if(isTransposed(M)) info = thin_svd(Mc,Mr,M.data(),D.data(),V.data(),U.data());
+    else info = thin_svd(Mr,Mc,M.data(),D.data(),U.data(),V.data());
     
     return info;
     }
