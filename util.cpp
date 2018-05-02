@@ -69,8 +69,8 @@ Tensor overlapT(const MPSt<Tensor>& phi, const MPOt<Tensor>& H, const MPSt<Tenso
 template ITensor overlapT(const MPS& , const MPO& , const MPS&);
 template IQTensor overlapT(const IQMPS& , const IQMPO& , const IQMPS&);
 
-ITensor overlapT(const MPS& phi, const MPS& psi) { return overlapT(phi,sysOp(phi.sites(),"Id").toMPO(),psi); }
-//IQTensor overlapT(const IQMPS& phi, const IQMPS& psi) { return overlapT(phi,sysOp(phi.sites(),"Id"),psi); }
+template<> ITensor overlapT(const MPS& phi, const MPS& psi) { return overlapT(phi,sysOp(phi.sites(),"Id").toMPO(),psi); }
+template<> IQTensor overlapT(const IQMPS& phi, const IQMPS& psi) { return overlapT(phi,sysOp(phi.sites(),"Id"),psi); }
 
 template<class MPSLike>
 void regauge(MPSLike& psi , int o, Args const& args) {
@@ -521,8 +521,8 @@ LRPair<Tensor> tensorProdContract(MPSt<Tensor> const& psiL, MPSt<Tensor> const& 
     
     return LRPair<Tensor>(L,R);
     }
-template ITPair tensorProdContract(MPS const&, MPS const&, MPO const&);
-template IQTPair tensorProdContract(IQMPS const&, IQMPS const&, IQMPO const&);
+template LRPair<ITensor> tensorProdContract(MPS const&, MPS const&, MPO const&);
+template LRPair<IQTensor> tensorProdContract(IQMPS const&, IQMPS const&, IQMPO const&);
 
 template<class Tensor>
 double tensorProduct(const MPSt<Tensor>& psiA, const MPSt<Tensor>& psiB, MPSt<Tensor>& ret, const Tensor& W, int lr) {

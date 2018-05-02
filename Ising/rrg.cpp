@@ -195,12 +195,12 @@ int main(int argc, char *argv[]) {
             fprintf(stderr,"dim H = %d... ",int(sL)*int(sR));
             if(doI || toobig) { // iterative function-based diag, ARPACK (best for large s,D, or N) or ITensor 
                 if(toobig && !doI) fprintf(stderr,"H too large, iterative diag\n");
-                tensorProdH resH(tpH);
+                tensorProdH<ITensor> resH(tpH);
 
                 #ifdef USE_ARPACK                   
                 auto nn = int(sL)*int(sR) , nev = min(s,int(sL)*int(sR)-2);
-                ARSymStdEig<Real, tensorProdH> tprob;
-                tprob.DefineParameters(nn,nev,&resH,&tensorProdH::MultMv,"SA", min(2*nev,nn-1),tol,10000*nev);
+                ARSymStdEig<Real, tensorProdH<ITensor> > tprob;
+                tprob.DefineParameters(nn,nev,&resH,&tensorProdH<ITensor>::MultMv,"SA", min(2*nev,nn-1),tol,10000*nev);
                 auto nconv = tprob.FindEigenvectors();
                 fprintf(stderr,"nconv = %d (tol %1.0e)\n",nconv,tol);
 

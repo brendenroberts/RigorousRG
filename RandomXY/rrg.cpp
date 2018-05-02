@@ -98,12 +98,12 @@ int main(int argc, char *argv[]) {
     
     vector<MPO> prodSz,prodSx,projSzUp,projSzDn,projSxUp,projSxDn;
     for(auto& it : hsps) { 
-        auto curSz = sysOp(it,"Sz",2.0); prodSz.push_back(curSz);
-        auto curSx = sysOp(it,"Sx",2.0); prodSx.push_back(curSx);
-        auto curSzUp = sysOp(it,"Id"); curSzUp.plusEq(curSz); curSzUp /= 2.0;
-        auto curSzDn = sysOp(it,"Id"); curSzDn.plusEq(-1.0*curSz); curSzDn /= 2.0;
-        auto curSxUp = sysOp(it,"Id"); curSxUp.plusEq(curSx); curSxUp /= 2.0;
-        auto curSxDn = sysOp(it,"Id"); curSxDn.plusEq(-1.0*curSx); curSxDn /= 2.0;
+        auto curSz = sysOp(it,"Sz",2.0).toMPO(); prodSz.push_back(curSz);
+        auto curSx = sysOp(it,"Sx",2.0).toMPO(); prodSx.push_back(curSx);
+        auto curSzUp = sysOp(it,"Id").toMPO(); curSzUp.plusEq(curSz); curSzUp /= 2.0;
+        auto curSzDn = sysOp(it,"Id").toMPO(); curSzDn.plusEq(-1.0*curSz); curSzDn /= 2.0;
+        auto curSxUp = sysOp(it,"Id").toMPO(); curSxUp.plusEq(curSx); curSxUp /= 2.0;
+        auto curSxDn = sysOp(it,"Id").toMPO(); curSxDn.plusEq(-1.0*curSx); curSxDn /= 2.0;
         projSzUp.push_back(curSzUp); projSzDn.push_back(curSzDn);
         projSxUp.push_back(curSxUp); projSxDn.push_back(curSxDn);
         }   
@@ -201,14 +201,14 @@ int main(int argc, char *argv[]) {
             fprintf(stderr,"dim H = %d... ",int(sL)*int(sR));
             if(doI || toobig) { // iterative diag: ARPACK++ (best for large problems) or ITensor
                 if(toobig && !doI) fprintf(stderr,"H too large, iterative diag\n");
-                tensorProdH resH(tpH);
+                tensorProdH<ITensor> resH(tpH);
                 
                 #ifdef USE_ARPACK                   
                 auto nn = int(sL)*int(sR);
-                ARSymStdEig<Real, tensorProdH> tprob;
+                ARSymStdEig<Real, tensorProdH<ITensor> > tprob;
                 for(int i = 0 , nconv = 0 ; nconv < s ; ++i) {
                     if(i != 0) tol *= 1e1;
-                    tprob.DefineParameters(nn,s,&resH,&tensorProdH::MultMv,"SA", min(2*s,nn-1),tol,10000*s);
+                    tprob.DefineParameters(nn,s,&resH,&tensorProdH<ITensor>::MultMv,"SA", min(2*s,nn-1),tol,10000*s);
                     nconv = tprob.FindEigenvectors();
                     fprintf(stderr,"nconv = %d (tol %1.0e)\n",nconv,tol);
                     }

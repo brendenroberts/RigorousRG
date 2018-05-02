@@ -45,42 +45,25 @@ struct LRPair {
     LRPair() {}
     LRPair(const T& LL , const T& RR): L(LL) , R(RR) {}
 };
-using IntPair = LRPair<int>;
-using RealPair = LRPair<Real>;
-using IndexPair = LRPair<Index>;
-using ITPair = LRPair<ITensor>;
-using IQTPair = LRPair<IQTensor>;
-using RVPair = LRPair<vector<Real> >;
 
 // class used to interface with ARPACK++ or Davidson solver
+template<class Tensor>
 class tensorProdH {
 private:
-    ITPair   ten;
-    RVPair   dat;
-    RealPair scl;
-    IntPair  dim;
+    LRPair<Tensor>        ten;
+    LRPair<vector<Real> > dat;
+    LRPair<Real>          scl;
+    LRPair<int>           dim;
 
 public:
-    tensorProdH(ITPair HH) : ten(HH) {
-        dat = RVPair(doTask(getReal{},ten.L.store()),doTask(getReal{},ten.R.store()));
-        scl = RealPair(ten.L.scale().real(),ten.R.scale().real());
-        dim = IntPair(int(findtype(ten.L,Select)),int(findtype(ten.R,Select)));
+    tensorProdH(LRPair<Tensor> HH) : ten(HH) {
+        dat = LRPair<vector<Real> >(doTask(getReal{},ten.L.store()),doTask(getReal{},ten.R.store()));
+        scl = LRPair<Real>(ten.L.scale().real(),ten.R.scale().real());
+        dim = LRPair<int>(int(findtype(ten.L,Select)),int(findtype(ten.R,Select)));
         }
-    void product(const ITensor& A , ITensor& B) const;
+    void product(const Tensor& A , Tensor& B) const;
     void MultMv(Real* v , Real* w);
     int size() const;
-};
-
-// class used to interface with ARPACK++ in presence of symmetries
-class compositeH {
-private:
-    vector<IntPair>                  dims;
-    vector<vector<RVPair> >          dgData;
-    vector<vector<vector<RVPair> > > bdData;
-
-public:
-    compositeH(const vector<vector<ITPair> >& , const vector<vector<vector<ITPair> > >&);
-    void MultMv(Real* v , Real* w);
 };
 
 // utility functions for printing matrices and vectors to stderr
@@ -105,9 +88,8 @@ void reducedDM(const MPS& , MPO& , int);
 template<class Tensor>
 Tensor overlapT(const MPSt<Tensor>& , const MPOt<Tensor>& , const MPSt<Tensor>&);
 
-//template<class Tensor>
-//Tensor overlapT(const MPSt<Tensor>& , const MPSt<Tensor>&);
-ITensor overlapT(const MPS& , const MPS&);
+template<class Tensor>
+Tensor overlapT(const MPSt<Tensor>& , const MPSt<Tensor>&);
 
 template<class MPSLike>
 void regauge(MPSLike& , int , Args const&);
@@ -126,7 +108,7 @@ Real measOp(const MPSt<Tensor>& , const IQTensor& , int);
 template<class Tensor>
 void extractBlocks(AutoMPO const& , vector<MPOt<Tensor> >& ,  const SiteSet&);
 
-template<typename Tensor>
+template<class Tensor>
 MPSt<Tensor> opFilter(MPSt<Tensor> const& , vector<MPOt<Tensor> > const& , Real , int);
 
 template<class Tensor>
