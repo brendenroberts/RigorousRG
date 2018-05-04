@@ -17,7 +17,7 @@
 
 #define LEFT   0
 #define RIGHT  1
-#define MAXBD  800
+#define MAXBD  1000
 #define args(x) range(x.size())
 
 using namespace itensor;
@@ -28,7 +28,7 @@ using std::max;
 // "catchall" error threshold for most dangling-bond MPS/MPO operations
 const Real eps = 1E-10;
 // more sensitive threshold for single MPS or MPO
-const Real epx = 1E-14;
+const Real epx = 1E-15;
 
 const auto Select = IndexType("Select");
 struct getReal {};

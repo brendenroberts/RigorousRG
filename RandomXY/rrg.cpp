@@ -66,7 +66,7 @@ int main(int argc, char *argv[]) {
     MPS bSpaceR(hsps[0]);
     combineMPS(V1,bSpaceL,LEFT);
     combineMPS(V1,bSpaceR,RIGHT);
-    
+
     // Hamiltonian parameters
     const double Gamma = 2.0;
     vector<double> J(2*(N-1));

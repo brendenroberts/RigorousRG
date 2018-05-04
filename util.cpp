@@ -561,212 +561,45 @@ double tensorProduct(const MPSt<Tensor>& psiA, const MPSt<Tensor>& psiB, MPSt<Te
 template double tensorProduct(const MPS& , const MPS& , MPS& , const ITensor& , int);
 //template double tensorProduct(const IQMPS& , const IQMPS& , IQMPS& , const IQTensor& , int);
 
-template<class Tensor> 
-double combineMPS(const vector<MPSt<Tensor> >& v_in , MPSt<Tensor>& ret, int lr) {
+template <>
+double combineMPS(const vector<MPS>& v_in , MPS& ret, int lr) {
     double ctime = 0.0;
-/*
     auto n = (int)v_in.size(); 
     if(n == 1) {
         ret = v_in[0];
         return ctime;
-    } else if(n > 2) { // might not suck??
+    } else if(n > 2) {
         auto aMPS = ret,bMPS = ret; 
-        vector<MPSt<Tensor> > a(v_in.begin(),v_in.begin() + v_in.size()/2);
-        vector<MPSt<Tensor> > b(v_in.begin() + v_in.size()/2,v_in.end());
+        vector<MPS> a(v_in.begin(),v_in.begin() + v_in.size()/2);
+        vector<MPS> b(v_in.begin() + v_in.size()/2,v_in.end());
         ctime += combineMPS(a,aMPS,lr);
         ctime += combineMPS(b,bMPS,lr);
-        vector<MPSt<Tensor> > c = {aMPS,bMPS};
+        vector<MPS> c = {aMPS,bMPS};
         ctime += combineMPS(c,ret,lr);
         return ctime;
         }
-*/
-    using IndexT = typename Tensor::index_type;
-    const int N = ret.N();
-    const auto& hs = ret.sites();
-    const int xs = lr ? 1 : N;
+
     auto vecs = v_in;
-    vector<IndexT> inds,ext;
-    IndexT ak,bk,ci,vi,sp;
-    Tensor T,U,S,V;
     time_t t1,t2;
-/*
-    int ntot = 0 , nprev = 0;
+    Index ci;
+
+    int xs = lr ? 1 : ret.N() , ntot = 0 , nprev = 0;
     for(auto& v : vecs) ntot += (ci = findtype(v.A(xs),Select)) ? int(ci) : 1;
-    auto ei = IndexT("ext",ntot,Select);
-    auto diag = vector<Real>(int(ei));
+    auto ei = Index("ext",ntot,Select);
     for(auto& v : vecs) {
-        Print("new v");
-        if(!(ci = findtype(v.A(xs),Select))) {v.Aref(xs) *= setElt(ei(++nprev)); Print(nprev);}
+        if(!(ci = findtype(v.A(xs),Select))) v.Aref(xs) *= setElt(ei(++nprev));
         else {
-            std::fill(diag.begin(), diag.end(), 0.0);
-            for(int i = nprev ; i < nprev+int(ci) ; ++i) {Print(i+1); diag[i] = 1.0;}
-            v.Aref(xs) *= diagTensor(diag,ei,ci);
+            auto map = ITensor(ei,ci); 
+            for(int i : range1(int(ci))) map.set(ci(i),ei(i+nprev),1.0);
+            v.Aref(xs) *= map;
             nprev += int(ci);
             }
         }
 
-    ret = sum(vecs,{"Cutoff",eps});
-*/
-    int nx = 0;
-    for(auto& v : vecs) {
-        nx += (ci = findtype(v.A(xs),Select)) ? int(ci) : 1;
-        v.position(xs,{"Cutoff",1e-24});
-        }
-
-    if(lr == LEFT) {
-        // Do first tensor
-        int bm = 0;
-        for(auto& v : vecs) bm += int(leftLinkInd(v,N));
-        vi = Index("ext",nx,Select);
-        bk = IndexT("li",bm);
-        sp = hs.si(N);
-        Tensor A(vi,bk,sp);
-        int bsum = 0, nsum = 0;
-        for(auto& v : vecs) {
-            auto bi = leftLinkInd(v,N);
-            T = v.A(N);
-            if(!(ci = findtype(T,Select))) {
-                ci = Index("dummy",1,Select);
-                T *= setElt(ci(1));
-                }
-            for(int n : range1(int(ci)))
-                for(int b :range1(int(bi)))
-                    for(int s : range1(int(sp)))
-                        A.set(vi(nsum+n),bk(bsum+b),sp(s),T.real(sp(s),bi(b),ci(n)));
-            bsum += int(bi);
-            nsum += int(ci);    
-            }
-        U = Tensor(bk);
-        V = Tensor(vi,sp);
-        time(&t1);
-        svdL(A,U,S,V,{"Cutoff",1e-16});
-        time(&t2); ctime += difftime(t2,t1);
-        inds.push_back(bk);
-        ret.Aref(N) = V;
-
-        // Do middle tensors
-        for(int i = N-1 ; i > 1 ; --i) {
-            int bm = 0;
-            for(auto& v : vecs) bm += int(leftLinkInd(v,i));
-            ak = inds.back();
-            bk = IndexT("li",bm);
-            sp = hs.si(i);
-            A = Tensor(ak,bk,sp);
-            int asum = 0 , bsum = 0;
-            for(auto& v : vecs) {
-                auto ai = rightLinkInd(v,i);
-                auto bi = leftLinkInd(v,i);
-                for(int a = 1 ; a <= int(ai) ; ++a)
-                    for(int b = 1 ; b <= int(bi) ; ++b)
-                        for(int s = 1 ; s <= int(sp) ; ++s)
-                            A.set(ak(asum+a),bk(bsum+b),sp(s),v.A(i).real(sp(s),ai(a),bi(b)));
-                asum += int(ai);
-                bsum += int(bi);
-                }
-            A *= U*S;
-            U = Tensor(bk);
-            V = Tensor(commonIndex(S,V),sp);
-            time(&t1);
-            svdL(A,U,S,V,{"Cutoff",1e-16});
-            time(&t2); ctime += difftime(t2,t1);
-            inds.push_back(bk);
-            ret.Aref(i) = V;
-            }
-       
-        // Do last tensor
-        ak = inds.back();
-        sp = hs.si(1);
-        A = Tensor(ak,sp);
-        int asum = 0;
-        for(auto& v : vecs) {
-            auto ai = rightLinkInd(v,1);
-            for(int a = 1 ; a <= int(ai) ; ++a)
-                for(int s = 1 ; s <= int(sp) ; ++s)
-                    A.set(ak(asum+a),sp(s),v.A(1).real(sp(s),ai(a)));
-            asum += int(ai);
-            }
-        A *= U*S;
-        ret.Aref(1) = A;
-    } else if(lr == RIGHT) { 
-        // Do last tensor
-        int bm = 0;
-        for(auto& v : vecs) bm += int(rightLinkInd(v,1));
-        vi = Index("ext",nx,Select);
-        bk = IndexT("li",bm);
-        sp = hs.si(1);
-        Tensor A(vi,bk,sp);
-        int bsum = 0 , nsum = 0;
-        for(auto& v : vecs) {
-            auto bi = rightLinkInd(v,1);
-            T = v.A(1);
-            if(!(ci = findtype(T,Select))) {
-                ci = Index("dummy",1,Select);
-                T *= setElt(ci(1));
-                }
-            for(int n = 1 ; n <= int(ci) ; ++n)
-                for(int b = 1 ; b <= int(bi) ; ++b)
-                    for(int s = 1 ; s <= int(sp) ; ++s)
-                        A.set(vi(nsum+n),bk(bsum+b),sp(s),T.real(sp(s),bi(b),ci(n)));
-            bsum += int(bi);
-            nsum += int(ci);
-            }
-        U = Tensor(vi,sp);
-        V = Tensor(bk);
-        time(&t1);
-        svdL(A,U,S,V,{"Cutoff",1e-16});
-        time(&t2); ctime += difftime(t2,t1);
-        inds.push_back(bk);
-        ret.Aref(1) = U;
-
-        // Do middle tensors
-        for(int i = 2 ; i < N ; ++i) {
-            int bm = 0;
-            for(auto& v : vecs) bm += int(rightLinkInd(v,i));
-            ak = inds.back();
-            bk = IndexT("li",bm);
-            sp = hs.si(i);
-            A = Tensor(ak,bk,sp);
-            int asum = 0 , bsum = 0;
-            for(auto& v : vecs) {
-                auto ai = leftLinkInd(v,i);
-                auto bi = rightLinkInd(v,i);
-                for(int a = 1 ; a <= int(ai) ; ++a)
-                    for(int b = 1 ; b <= int(bi) ; ++b)
-                        for(int s = 1 ; s <= int(sp) ; ++s)
-                            A.set(ak(asum+a),bk(bsum+b),sp(s),v.A(i).real(sp(s),ai(a),bi(b)));
-                asum += int(ai);
-                bsum += int(bi);
-                }
-            A *= S*V;
-            U = Tensor(commonIndex(U,S),sp);
-            V = Tensor();
-            time(&t1);
-            svdL(A,U,S,V,{"Cutoff",1e-16});
-            time(&t2); ctime += difftime(t2,t1);
-            inds.push_back(bk);
-            ret.Aref(i) = U;
-            }
-        
-        // Do first tensor
-        ak = inds.back();
-        sp = hs.si(N);
-        A = Tensor(ak,sp);
-        int asum = 0;
-        for(auto& v : vecs) {
-            auto ai = leftLinkInd(v,N);
-            for(int a = 1 ; a <= int(ai) ; ++a)
-                for(int s = 1 ; s <= int(sp) ; ++s)
-                    A.set(ak(asum+a),sp(s),v.A(N).real(sp(s),ai(a)));
-            asum += int(ai);
-            }
-        A *= S*V;
-        ret.Aref(N) = A;
-        }
+    ret = sum(vecs,{"Cutoff",1e-24});
 
     time(&t1);
     regauge(ret,xs,{"Cutoff",eps});
     time(&t2); ctime += difftime(t2,t1);
     return ctime; 
     }
-template double combineMPS(const vector<MPS>& vecs , MPS& ret, int lr);
-//template double combineMPS(const vector<IQMPS>& vecs , IQMPS& ret, int lr);
