@@ -27,9 +27,9 @@ int main(int argc, char *argv[]) {
     const int    D = atoi(argv[4]);  // formal D param
     
     // computational settings
-    const int    e   = 2; // number of DMRG states to compute, e>2 may be slow
-    const int    doI = 1; // diag restricted Hamiltonian iteratively?
-    const int    doV = 1; // compute viability from DMRG gs?
+    const int    e   = 2;    // number of DMRG states to compute, e>2 may be slow
+    const bool   doI = true; // diag restricted Hamiltonian iteratively?
+    const bool   doV = true; // compute viability from DMRG gs?
 
     // Hamitonian parameters
     const Real   J = 1.0;
@@ -183,48 +183,13 @@ int main(int argc, char *argv[]) {
         for(ll = 0 ; ll < N/w ; ll+=2) {
             auto spL = Spost[ll];                // L subspace
             auto spR = Spost[ll+1];              // R subspace
-            auto sL = findtype(spL.A(w),Select); // L dangling index
-            auto sR = findtype(spR.A(1),Select); // R dangling index
-            auto tpH = tensorProdContract(spL,spR,Hs[m+1][ll/2]);
-            bool toobig = (int(sL)*int(sR) >= 15000);
-            Index si("ext",s,Select);
-            Real tol = 1e-16;
 
             // STEP 1: find s lowest eigenpairs of restricted H
             time(&t1);
-            fprintf(stderr,"dim H = %d... ",int(sL)*int(sR));
-            if(doI || toobig) { // iterative function-based diag, ARPACK (best for large s,D, or N) or ITensor 
-                if(toobig && !doI) fprintf(stderr,"H too large, iterative diag\n");
-                tensorProdH<ITensor> resH(tpH);
-
-                #ifdef USE_ARPACK                   
-                auto nn = int(sL)*int(sR) , nev = min(s,int(sL)*int(sR)-2);
-                ARSymStdEig<Real, tensorProdH<ITensor> > tprob;
-                tprob.DefineParameters(nn,nev,&resH,&tensorProdH<ITensor>::MultMv,"SA", min(2*nev,nn-1),tol,10000*nev);
-                auto nconv = tprob.FindEigenvectors();
-                fprintf(stderr,"nconv = %d (tol %1.0e)\n",nconv,tol);
-
-                vector<Real> vdat;
-                vdat.reserve(nconv*nn);
-                auto vraw = tprob.RawEigenvectors();
-                vdat.assign(vraw,vraw+nconv*nn);
-                if(nconv != s) si = Index("ext",nconv,Select);
-                P = ITensor({sL,sR,si},Dense<Real>(std::move(vdat)));
-                #else
-                vector<ITensor> ret;
-                for(int i = 0 ; i < s ; ++i) ret.push_back(randomTensor(sL,sR));
-                davidsonT(resH,ret,{"ErrGoal",tol,"MaxIter",10000*s,"DebugLevel",-1});
-                fprintf(stderr,"done\n");
-                P = ITensor(sL,sR,si);
-                for(auto i : args(ret)) P += ret[i]*setElt(si(i+1));
-                #endif
-            } else { // full matrix diag routine, limited to small parameters (s,D)
-                diagHermitian(-tpH.L*tpH.R,P,Dg,{"Maxm",s});
-                fprintf(stderr,"done\n");
-                P *= delta(commonIndex(P,Dg),si);
-                }
-            // the following line can replace the entire above if/else block to randomly sample
-            // P = randomTensor(sL,sR,si);
+            auto tpH = tensorProdContract(spL,spR,Hs[m+1][ll/2]);
+            tensorProdH<ITensor> resH(tpH);
+            resH.diag(s,doI);
+            P = resH.eigenvectors();
             time(&t2);
             fprintf(stderr,"diag restricted H: %.f s\n",difftime(t2,t1));
 

@@ -81,6 +81,8 @@ void regauge(MPSLike& psi , int o, Args const& args) {
     }
 template void regauge(MPS& , int , Args const&);
 template void regauge(MPO& , int , Args const&);
+template void regauge(IQMPS& , int , Args const&);
+template void regauge(IQMPO& , int , Args const&);
 
 template<class Tensor>
 Real measEE(const MPSt<Tensor>& state , int a) {
@@ -561,36 +563,38 @@ double tensorProduct(const MPSt<Tensor>& psiA, const MPSt<Tensor>& psiB, MPSt<Te
 template double tensorProduct(const MPS& , const MPS& , MPS& , const ITensor& , int);
 //template double tensorProduct(const IQMPS& , const IQMPS& , IQMPS& , const IQTensor& , int);
 
-template <>
-double combineMPS(const vector<MPS>& v_in , MPS& ret, int lr) {
+template<class Tensor>
+double combineMPS(const vector<MPSt<Tensor> >& v_in , MPSt<Tensor>& ret, int lr) {
     double ctime = 0.0;
     auto n = (int)v_in.size(); 
     if(n == 1) {
         ret = v_in[0];
         return ctime;
     } else if(n > 2) {
-        auto aMPS = ret,bMPS = ret; 
-        vector<MPS> a(v_in.begin(),v_in.begin() + v_in.size()/2);
-        vector<MPS> b(v_in.begin() + v_in.size()/2,v_in.end());
-        ctime += combineMPS(a,aMPS,lr);
-        ctime += combineMPS(b,bMPS,lr);
-        vector<MPS> c = {aMPS,bMPS};
+        auto aSt = ret,bSt = ret; 
+        vector<MPSt<Tensor> > a(v_in.begin(),v_in.begin() + v_in.size()/2);
+        vector<MPSt<Tensor> > b(v_in.begin() + v_in.size()/2,v_in.end());
+        ctime += combineMPS(a,aSt,lr);
+        ctime += combineMPS(b,bSt,lr);
+        vector<MPSt<Tensor> > c = {aSt,bSt};
         ctime += combineMPS(c,ret,lr);
         return ctime;
         }
 
+    using IndexT = typename Tensor::index_type;
     auto vecs = v_in;
     time_t t1,t2;
-    Index ci;
+    IndexT ci;
 
     int xs = lr ? 1 : ret.N() , ntot = 0 , nprev = 0;
+
     for(auto& v : vecs) ntot += (ci = findtype(v.A(xs),Select)) ? int(ci) : 1;
-    auto ei = Index("ext",ntot,Select);
+    auto ei = extIndex::gen(ci,ntot,0);
     for(auto& v : vecs) {
         if(!(ci = findtype(v.A(xs),Select))) v.Aref(xs) *= setElt(ei(++nprev));
         else {
-            auto map = ITensor(ei,ci); 
-            for(int i : range1(int(ci))) map.set(ci(i),ei(i+nprev),1.0);
+            auto map = Tensor(ei,dag(ci)); 
+            for(int i : range1(int(ci))) map.set(dag(ci)(i),ei(i+nprev),1.0);
             v.Aref(xs) *= map;
             nprev += int(ci);
             }
@@ -603,3 +607,5 @@ double combineMPS(const vector<MPS>& v_in , MPS& ret, int lr) {
     time(&t2); ctime += difftime(t2,t1);
     return ctime; 
     }
+template double combineMPS(const vector<MPS>& , MPS& , int);
+template double combineMPS(const vector<IQMPS>& , IQMPS& , int);

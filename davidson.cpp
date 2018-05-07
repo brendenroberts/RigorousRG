@@ -11,7 +11,7 @@ Real davidsonT(BigMatrixT const& A, Tensor& phi, Args const& args) {
     phi = v.front();
     return eigs.front();
     }
-template Real davidsonT(tensorProdH const& , ITensor& , Args const&);
+template Real davidsonT(tensorProdH<ITensor> const& , ITensor& , Args const&);
 
 template <class BigMatrixT, class Tensor> 
 vector<Real> davidsonT(BigMatrixT const& A, vector<Tensor>& phi, Args const& args) {
@@ -353,4 +353,4 @@ vector<Real> davidsonT(BigMatrixT const& A, vector<Tensor>& phi, Args const& arg
 
     return eigs;
     }
-template vector<Real> davidsonT(tensorProdH const& , vector<ITensor>& , Args const&);
+template vector<Real> davidsonT(tensorProdH<ITensor> const& , vector<ITensor>& , Args const&);

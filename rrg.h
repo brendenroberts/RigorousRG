@@ -46,6 +46,13 @@ struct LRPair {
     LRPair(const T& LL , const T& RR): L(LL) , R(RR) {}
 };
 
+// helper method for compatibility betwen ITensors and IQTensors
+struct extIndex {
+    Index static gen(Index const& ai , int n , int q) { return Index("ext",n,Select); }
+    IQIndex static gen(IQIndex const& ai , int n , int q) {
+        return IQIndex("ext",Index("e1",n,Select,0),QN(0)); }
+};
+
 // class used to interface with ARPACK++ or Davidson solver
 template<class Tensor>
 class tensorProdH {
@@ -54,6 +61,7 @@ private:
     LRPair<vector<Real> > dat;
     LRPair<Real>          scl;
     LRPair<int>           dim;
+    Tensor                evc;
 
 public:
     tensorProdH(LRPair<Tensor> HH) : ten(HH) {
@@ -61,9 +69,11 @@ public:
         scl = LRPair<Real>(ten.L.scale().real(),ten.R.scale().real());
         dim = LRPair<int>(int(findtype(ten.L,Select)),int(findtype(ten.R,Select)));
         }
-    void product(const Tensor& A , Tensor& B) const;
-    void MultMv(Real* v , Real* w);
-    int size() const;
+    void product(const Tensor& , Tensor&) const;
+    void MultMv(Real* , Real*);
+    void diag(int , bool = true);
+    int size() const { return dim.L*dim.R; }
+    Tensor eigenvectors() { return evc; }
 };
 
 // utility functions for printing matrices and vectors to stderr
