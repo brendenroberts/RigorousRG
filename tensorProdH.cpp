@@ -1,4 +1,14 @@
+#ifdef USE_ARPACK 
+#include "arssym.h"
+#undef F77NAME
+#endif
+
 #include "rrg.h"
+
+#ifndef USE_ARPACK
+template <class BigMatrixT , class Tensor>
+vector<Real> davidsonT(BigMatrixT const& , vector<Tensor>& phi , Args const& args = Args::global());
+#endif
 
 template<class Tensor>
 void tensorProdH<Tensor>::product(const Tensor& A, Tensor& B) const {
@@ -31,9 +41,9 @@ void tensorProdH<Tensor>::diag(int s , bool doI) {
     fprintf(stderr,"dim H = %d... ",nn);
     if(doI || nn >= 15000) { // iterative diag: ARPACK++ (best for large problems) or ITensor
         if(nn >= 15000 && !doI) fprintf(stderr,"H too large, iterative diag\n");
-        auto tol = 1e-16;
         
         #ifdef USE_ARPACK
+        auto tol = 1e-16;
         ARSymStdEig<Real, tensorProdH<Tensor> > tprob;
         for(int i = 0 , nconv = 0 ; nconv < s ; ++i) {
             if(i != 0) tol *= 1e1;

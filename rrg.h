@@ -1,11 +1,6 @@
 #ifndef RRG__H
 #define RRG__H
 
-#ifdef USE_ARPACK 
-#include "arssym.h"
-#undef F77NAME
-#endif
-
 #include "itensor/mps/sites/spinhalf.h"
 #include "itensor/mps/autompo.h"
 #include "itensor/mps/dmrg.h"
@@ -38,19 +33,19 @@ inline vector<Real> doTask(getReal, Diag<Real> const& d) {
     return d.allSame() ? vector<Real>({d.val}) : d.store;
     }
 
+// helper method for compatibility betwen ITensors and IQTensors
+struct extIndex {
+    Index static gen(Index const& ai , int n , int q) { return Index("ext",n,Select); }
+    IQIndex static gen(IQIndex const& ai , int n , int q) {
+        return IQIndex("ext",Index("e1",n,Select,0),QN(0)); }
+};
+
 // general-purpose struct useful in merging step (L,R tensor product) 
 template<typename T>
 struct LRPair {
     T L,R;
     LRPair() {}
     LRPair(const T& LL , const T& RR): L(LL) , R(RR) {}
-};
-
-// helper method for compatibility betwen ITensors and IQTensors
-struct extIndex {
-    Index static gen(Index const& ai , int n , int q) { return Index("ext",n,Select); }
-    IQIndex static gen(IQIndex const& ai , int n , int q) {
-        return IQIndex("ext",Index("e1",n,Select,0),QN(0)); }
 };
 
 // class used to interface with ARPACK++ or Davidson solver
@@ -145,14 +140,5 @@ double combineMPS(const vector<MPSt<Tensor> >& , MPSt<Tensor>& , int);
 // svdL.cpp
 template<class Tensor>
 Spectrum svdL(Tensor , Tensor& , Tensor& , Tensor& , Args = Args::global());
-
-#ifndef USE_ARPACK
-// davidson.cpp
-template <class BigMatrixT , class Tensor>
-Real davidsonT(BigMatrixT const& , Tensor& , Args const& = Args::global());
-
-template <class BigMatrixT , class Tensor>
-vector<Real> davidsonT(BigMatrixT const& , vector<Tensor>& phi , Args const& args = Args::global());
-#endif
 
 #endif
