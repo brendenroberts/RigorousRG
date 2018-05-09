@@ -1,5 +1,5 @@
 #include "rrg.h"
-#define T_TOL 1e-20
+#define T_TOL 1e-18
 
 template<class Tensor>
 int nels(const Tensor& A) {
@@ -52,8 +52,7 @@ void reducedDM(const MPS& psi , MPO& rho , int ls) {
 
 template<class Tensor>
 Tensor overlapT(const MPSt<Tensor>& phi, const MPOt<Tensor>& H, const MPSt<Tensor>& psi) {
-    auto N = H.N();
-    if(phi.N() != N || psi.N() != N) Error("overlap mismatched N");
+    auto N = H.N(); if(phi.N() != N || psi.N() != N) Error("overlap mismatched N");
     auto lr = (findtype(phi.A(N),Select) ? LEFT : RIGHT);
     Tensor L;
 
@@ -71,6 +70,23 @@ template IQTensor overlapT(const IQMPS& , const IQMPO& , const IQMPS&);
 
 template<> ITensor overlapT(const MPS& phi, const MPS& psi) { return overlapT(phi,sysOp(phi.sites(),"Id").toMPO(),psi); }
 template<> IQTensor overlapT(const IQMPS& phi, const IQMPS& psi) { return overlapT(phi,sysOp(phi.sites(),"Id"),psi); }
+
+template<class Tensor>
+Tensor overlapT(const MPOt<Tensor>& A, const MPOt<Tensor>& B) {
+    auto N = A.N(); if(B.N() != N) Error("overlap mismatched N");
+    auto lr = (findtype(A.A(N),Select) ? LEFT : RIGHT);
+    Tensor L;
+
+    for(int i = 0; i < N; ++i) {
+        int x = (lr ? N-i : i+1);
+        L = i ? L*mapprime(A.A(x),Site,0,2) : mapprime(A.A(x),Site,0,2);
+        L *= dag(mapprime(B.A(x),Site,1,2,Site,0,1,Link,0,1,Select,0,1));
+        }
+    
+    return L;
+    }
+template ITensor overlapT(const MPO& , const MPO&);
+template IQTensor overlapT(const IQMPO& , const IQMPO&);
 
 template<class MPSLike>
 void regauge(MPSLike& psi , int o, Args const& args) {
@@ -261,10 +277,8 @@ template void extractBlocks(AutoMPO const& , vector<IQMPO>& , const SiteSet&);
 template<class Tensor>
 Tensor splitMPO(const MPOt<Tensor>& O, MPOt<Tensor>& P, int lr) {
     using IndexT = typename Tensor::index_type;
-    auto N = O.N();
-    auto n = P.N();
-    const auto HS = O.sites();
-    const auto hs = P.sites();
+    auto N = O.N() , n = P.N();
+    const auto HS = O.sites() , hs = P.sites();
     auto M = O;
     int t = lr ? N-n : n;
     Tensor S,V;
@@ -272,7 +286,7 @@ Tensor splitMPO(const MPOt<Tensor>& O, MPOt<Tensor>& P, int lr) {
 
     M.position(t,{"Truncate",false});
     auto B = M.A(t)*M.A(t+1), U = M.A(t);
-    svdL(B,U,S,V,{"Truncate",false,"LeftIndexType",Select,"RightIndexType",Select});
+    svdL(B,U,S,V,{"Cutoff",T_TOL,"LeftIndexType",Select,"RightIndexType",Select});
     auto R = lr ? V : U;
     sp = hs.si(lr ? 1 : n);
     sq = HS.si(lr ? t+1 : t);
@@ -353,22 +367,19 @@ double restrictMPO(const MPOt<Tensor>& O , MPOt<Tensor>& res , int ls , int D, i
     auto rdat = doTask(getReal{},SR.store());
     dscal_wrapper(int(ri),SR.scale().real(),rdat.data());
 
-    vector<LRVal> args,wk;
-    args.reserve(D*D);
-    wk.reserve(2*D);
+    vector<LRVal> args,work;
+    args.reserve(D*D); work.reserve(int(li));
    
-    for(int i = 0 ; i < min(2*D,int(li)) ; ++i)
-        wk.push_back(LRVal(ldat[i]*rdat[0],i+1,1));
+    for(int i = 0 ; i < int(li) ; ++i)
+        work.push_back(LRVal(ldat[i]*rdat[0],i+1,1));
     
     for(int i = 0 ; i < min(D*D,int(li)*int(ri)) ; ++i) {  
-        int amax = argmax(wk);
-        if(amax == int(wk.size())-1)
-            for(int j = 0,pln = wk.size() ; j < D && pln+j < int(li) ; ++j)
-                wk.push_back(LRVal(ldat[pln+j]*rdat[0],pln+j+1,1));
-        amax = argmax(wk);
-        if(wk[amax].val < eps) break;
-        args.push_back(wk[amax]);
-        wk[amax] = LRVal(ldat[wk[amax].L-1]*rdat[wk[amax].R],wk[amax].L,wk[amax].R+1);
+        int amax = argmax(work);
+        auto& next = work[amax];
+        if(next.val < eps) break;
+        args.push_back(next);
+        if(next.R == int(ri)) work.erase(work.begin()+amax);
+        else work[amax] = LRVal(ldat[next.L-1]*rdat[next.R],next.L,next.R+1);
         }
 
     auto lt = Index("L",args[argmaxL(args)].L,Select);
@@ -423,8 +434,7 @@ template double restrictMPO(const MPO& , MPO& , int , int , int);
 //template double restrictMPO(const IQMPO& , IQMPO& , int , int , int);
 
 template<class Tensor>
-MPSt<Tensor> applyMPO(MPOt<Tensor> const& K, MPSt<Tensor> const& psi, int lr , Args const& args) {
-    using IndexT = typename Tensor::index_type;
+MPSt<Tensor> applyMPO(MPOt<Tensor> const& K, MPSt<Tensor> const& psi, int lr , Tensor flTen , Args const& args) {
     auto cutoff = args.getReal("Cutoff",epx);
     auto dargs = Args{"Cutoff",cutoff};
     auto maxm_set = args.defined("Maxm");
@@ -449,7 +459,8 @@ MPSt<Tensor> applyMPO(MPOt<Tensor> const& K, MPSt<Tensor> const& psi, int lr , A
     //Build environment tensors from the left/right
     if(verbose) print("Building environment tensors...");
     auto E = std::vector<Tensor>(N+1);
-    E.at(1) = psi.A(xs)*K.A(xs)*Kc.A(xs)*psic.A(xs);
+    if(flTen) E.at(1) = ((psi.A(xs)*K.A(xs))*flTen)*((Kc.A(xs)*psic.A(xs))*dag(flTen));
+    else E.at(1) = psi.A(xs)*K.A(xs)*Kc.A(xs)*psic.A(xs);
     for(int j = 2; j < N; ++j) {
         int x = lr ? j : N+1-j;
         E.at(j) = E.at(j-1)*psi.A(x)*K.A(x)*Kc.A(x)*psic.A(x);
@@ -494,15 +505,24 @@ MPSt<Tensor> applyMPO(MPOt<Tensor> const& K, MPSt<Tensor> const& psi, int lr , A
 
     res.Aref(xs) = O;
 
-    auto px = findtype(psi.A(xs),Select) , Kx = findtype(K.A(xs),Select);
-    if(px && Kx) res.Aref(xs) *= combiner(vector<IndexT>({px,Kx}),{"IndexType",Select});
+    if(flTen) res.Aref(xs) *= flTen;
     res.leftLim(xs-1);
     res.rightLim(xs+1);
 
     return res;
     }
+template MPS applyMPO(MPO const&, MPS const&, int, ITensor, Args const&);
+//template IQMPS applyMPO(IQMPO const&, IQMPS const&, int, IQTensor, Args const&);
+
+template<class Tensor>
+MPSt<Tensor> applyMPO(MPOt<Tensor> const& K, MPSt<Tensor> const& psi, int lr , Args const& args) {
+    using IndexT = typename Tensor::index_type;
+    int xs = lr ? 1 : K.N();
+    auto px = findtype(psi.A(xs),Select) , Kx = findtype(K.A(xs),Select);
+    return applyMPO(K,psi,lr,px&&Kx ? combiner(vector<IndexT>({px,Kx}),{"IndexType",Select}):Tensor(),args);
+    }
 template MPS applyMPO(MPO const&, MPS const&, int, Args const&);
-template IQMPS applyMPO(IQMPO const&, IQMPS const&, int, Args const&);
+//template IQMPS applyMPO(IQMPO const&, IQMPS const&, int, Args const&);
 
 template<class Tensor>
 LRPair<Tensor> tensorProdContract(MPSt<Tensor> const& psiL, MPSt<Tensor> const& psiR, MPOt<Tensor> const& H) {
@@ -563,24 +583,25 @@ double tensorProduct(const MPSt<Tensor>& psiA, const MPSt<Tensor>& psiB, MPSt<Te
 template double tensorProduct(const MPS& , const MPS& , MPS& , const ITensor& , int);
 //template double tensorProduct(const IQMPS& , const IQMPS& , IQMPS& , const IQTensor& , int);
 
-template<class Tensor>
-double combineMPS(const vector<MPSt<Tensor> >& v_in , MPSt<Tensor>& ret, int lr) {
+template<class MPSLike>
+double makeVS(const vector<MPSLike>& v_in , MPSLike& ret, int lr) {
     double ctime = 0.0;
     auto n = (int)v_in.size(); 
     if(n == 1) {
         ret = v_in[0];
         return ctime;
     } else if(n > 2) {
-        auto aSt = ret,bSt = ret; 
-        vector<MPSt<Tensor> > a(v_in.begin(),v_in.begin() + v_in.size()/2);
-        vector<MPSt<Tensor> > b(v_in.begin() + v_in.size()/2,v_in.end());
-        ctime += combineMPS(a,aSt,lr);
-        ctime += combineMPS(b,bSt,lr);
-        vector<MPSt<Tensor> > c = {aSt,bSt};
-        ctime += combineMPS(c,ret,lr);
+        auto aVS = ret , bVS = ret; 
+        vector<MPSLike> avec(v_in.begin(),v_in.begin() + v_in.size()/2);
+        vector<MPSLike> bvec(v_in.begin() + v_in.size()/2,v_in.end());
+        ctime += makeVS(avec,aVS,lr);
+        ctime += makeVS(bvec,bVS,lr);
+        vector<MPSLike> cvec = {aVS,bVS};
+        ctime += makeVS(cvec,ret,lr);
         return ctime;
         }
 
+    using Tensor = typename MPSLike::TensorT;
     using IndexT = typename Tensor::index_type;
     auto vecs = v_in;
     time_t t1,t2;
@@ -607,5 +628,7 @@ double combineMPS(const vector<MPSt<Tensor> >& v_in , MPSt<Tensor>& ret, int lr)
     time(&t2); ctime += difftime(t2,t1);
     return ctime; 
     }
-template double combineMPS(const vector<MPS>& , MPS& , int);
-template double combineMPS(const vector<IQMPS>& , IQMPS& , int);
+template double makeVS(const vector<MPS>& , MPS& , int);
+template double makeVS(const vector<MPO>& , MPO& , int);
+//template double makeVS(const vector<IQMPS>& , IQMPS& , int);
+//template double makeVS(const vector<IQMPO>& , IQMPO& , int);

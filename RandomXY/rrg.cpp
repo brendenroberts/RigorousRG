@@ -64,8 +64,8 @@ int main(int argc, char *argv[]) {
         }
     MPS bSpaceL(hsps[0]);
     MPS bSpaceR(hsps[0]);
-    combineMPS(V1,bSpaceL,LEFT);
-    combineMPS(V1,bSpaceR,RIGHT);
+    makeVS(V1,bSpaceL,LEFT);
+    makeVS(V1,bSpaceR,RIGHT);
 
     // Hamiltonian parameters
     const double Gamma = 2.0;
@@ -273,7 +273,7 @@ int main(int argc, char *argv[]) {
             if(fabs(e_prev[j]-evals[j]) > max_conv) max_conv = e_prev[j]-evals[j];
         
         fprintf(stderr,"DMRG BD ");
-        for(const auto& it : evecs) fprintf(stderr,"%d ",maxM(it));
+        for(const auto& it : evecs) fprintf(stderr,"%3d ",maxM(it));
         fprintf(stderr,"\tgap: %e\tconv=%9.2e,%9.2e\telapsed: %.f s\n",gap,
             e_prev[0]-evals[0],e_prev[1]-evals[1],difftime(t2,t1));
         conv = max(over_conv*gap,flr);

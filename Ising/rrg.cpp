@@ -65,8 +65,8 @@ int main(int argc, char *argv[]) {
         }
     MPS bSpaceL(hsps[0]);
     MPS bSpaceR(hsps[0]);
-    combineMPS(V1,bSpaceL,LEFT);
-    combineMPS(V1,bSpaceR,RIGHT);
+    makeVS(V1,bSpaceL,LEFT);
+    makeVS(V1,bSpaceR,RIGHT);
 
     // initialize block H, and boundary terms used in reduction step
     AutoMPO autoH(hs);
@@ -181,8 +181,8 @@ int main(int argc, char *argv[]) {
         // MERGE/REDUCE STEP: construct tensor subspace, sample to reduce dimension
         Spre.clear();
         for(ll = 0 ; ll < N/w ; ll+=2) {
-            auto spL = Spost[ll];                // L subspace
-            auto spR = Spost[ll+1];              // R subspace
+            auto spL = Spost[ll];   // L subspace
+            auto spR = Spost[ll+1]; // R subspace
 
             // STEP 1: find s lowest eigenpairs of restricted H
             time(&t1);
@@ -241,7 +241,7 @@ int main(int argc, char *argv[]) {
     time(&t2);
      
     fprintf(stderr,"DMRG BD ");
-    for(const auto& it : evecs) fprintf(stderr,"%d ",maxM(it));
+    for(const auto& it : evecs) fprintf(stderr,"%3d ",maxM(it));
     fprintf(stderr,"\telapsed: %.f s\n",difftime(t2,t1));     
     time(&tF);
 

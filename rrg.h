@@ -96,6 +96,9 @@ Tensor overlapT(const MPSt<Tensor>& , const MPOt<Tensor>& , const MPSt<Tensor>&)
 template<class Tensor>
 Tensor overlapT(const MPSt<Tensor>& , const MPSt<Tensor>&);
 
+template<class Tensor>
+Tensor overlapT(const MPOt<Tensor>& , const MPOt<Tensor>&);
+
 template<class MPSLike>
 void regauge(MPSLike& , int , Args const&);
 
@@ -126,6 +129,9 @@ template<class Tensor>
 double restrictMPO(const MPOt<Tensor>& , MPOt<Tensor>& , int , int , int);
 
 template<class Tensor>
+MPSt<Tensor> applyMPO(MPOt<Tensor> const& , MPSt<Tensor> const& , int , Tensor , Args const& = Args::global());
+
+template<class Tensor>
 MPSt<Tensor> applyMPO(MPOt<Tensor> const& , MPSt<Tensor> const& , int , Args const& = Args::global());
 
 template<class Tensor>
@@ -134,8 +140,8 @@ LRPair<Tensor> tensorProdContract(MPSt<Tensor> const&, MPSt<Tensor> const&, MPOt
 template<class Tensor>
 double tensorProduct(const MPSt<Tensor>& , const MPSt<Tensor>& , MPSt<Tensor>& , const Tensor& , int);
 
-template<class Tensor>
-double combineMPS(const vector<MPSt<Tensor> >& , MPSt<Tensor>& , int);
+template<class MPSLike>
+double makeVS(const vector<MPSLike>& , MPSLike& , int);
 
 // svdL.cpp
 template<class Tensor>
