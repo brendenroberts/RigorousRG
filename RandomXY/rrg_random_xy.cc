@@ -44,7 +44,7 @@ int main(int argc, char *argv[]) {
     std::uniform_real_distribution<double> udist(0.0,1.0);
 
     vector<double> J(2*(N-1));
-    const double Gamma = stof(inp.at("Gamma")); // disorder strength
+    const double Gamma = stod(inp.at("Gamma")); // disorder strength
     for(auto i = 0u ; i < N-1 ; ++i) {
         J.at(2*i+0) = pow(udist(gen),Gamma);
         J.at(2*i+1) = pow(udist(gen),Gamma);
