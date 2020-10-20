@@ -1,0 +1,42 @@
+# Adapted Makefile from ITensor examples
+ITENSOR_DIR=/path/to/itensor
+HEADERS=rrg.h
+
+#################################################################
+#################################################################
+#################################################################
+#################################################################
+
+CCFILES=util.cc tensorProdH.cc
+C2FLAGS= -I. -Wno-unused-function
+
+include $(ITENSOR_DIR)/this_dir.mk
+include $(ITENSOR_DIR)/options.mk
+
+TENSOR_HEADERS=$(ITENSOR_DIR)/itensor/core.h
+
+#Mappings --------------
+OBJECTS=$(patsubst %.cc,%.o, $(CCFILES))
+
+#Rules ------------------
+
+%.o: %.cc $(HEADERS) $(TENSOR_HEADERS)
+	$(CCCOM) -c $(CCFLAGS) $(C2FLAGS) -o $@ $<
+
+#Targets -----------------
+
+build: $(APP)
+
+build: ising random_xy
+
+all: ising random_xy
+
+ising: $(ITENSOR_LIBS) $(TENSOR_HEADERS)
+	$(CCCOM) $(CCFLAGS) Ising/rrg_ising.cc $(CCFILES) -o rrg_ising $(LIBFLAGS)
+
+random_xy: $(ITENSOR_LIBS) $(TENSOR_HEADERS)
+	$(CCCOM) $(CCFLAGS) RandomXY/rrg_random_xy.cc $(CCFILES) -o rrg_random_xy $(LIBFLAGS)
+
+clean:
+	rm -rf *.o rrg_ising rrg_random_xy
+

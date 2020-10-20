@@ -1,150 +1,139 @@
-#ifndef RRG__H
-#define RRG__H
+#ifndef RRG_H
+#define RRG_H
 
-#include "itensor/mps/sites/spinhalf.h"
+#include "itensor/util/print_macro.h"
 #include "itensor/mps/autompo.h"
 #include "itensor/mps/dmrg.h"
-#include "itensor/util/print_macro.h"
 #include <vector>
-#include <ctime>
-#include <cmath>
 #include <string>
+#include <algorithm>
+#include <cmath>
+#include <ctime>
+#include <map>
 
-#define LEFT   0
-#define RIGHT  1
-#define MAXBD  1000
+#define LEFT  0
+#define RIGHT 1
+#define MAXBD 800
 #define args(x) range(x.size())
 
 using namespace itensor;
 using std::vector;
-using std::min;
-using std::max;
+using std::string;
+using std::pair;
 
-// "catchall" error threshold for most dangling-bond MPS/MPO operations
+// error threshold for most dangling-bond operations
 const Real eps = 1E-10;
 // more sensitive threshold for single MPS or MPO
-const Real epx = 1E-15;
+const Real epx = 1E-14;
 
-const auto Select = IndexType("Select");
-struct getReal {};
-const auto invsqrt = [](Real r) { return 1.0/sqrt(r); };
-inline vector<Real> doTask(getReal, Dense<Real> const& d) { return d.store; }
-inline vector<Real> doTask(getReal, Diag<Real> const& d) {
-    return d.allSame() ? vector<Real>({d.val}) : d.store;
+inline Index extIndex(ITensor const& A , string tag = "Ext") {
+    if(hasQNs(A))
+        return Index(QN({-div(A)}),1,tag);
+    else
+        return Index(1,tag);
     }
 
-// helper method for compatibility betwen ITensors and IQTensors
-struct extIndex {
-    Index static gen(Index const& ai , int n , int q) { return Index("ext",n,Select); }
-    IQIndex static gen(IQIndex const& ai , int n , int q) {
-        return IQIndex("ext",Index("e1",n,Select,0),QN(0)); }
+// class used for generalized ''dangling-bond'' MPS (matrix product vector space)
+class MPVS : public MPS {
+protected:
+    int lr;
+public:
+    MPVS() {}
+    MPVS(int N , int dir = RIGHT) : MPS(N) , lr(dir) {}
+    MPVS(SiteSet const& sites , int dir = RIGHT) : MPS(sites) , lr(dir) {}
+    MPVS(InitState const& initState , int dir = RIGHT) : MPS(initState) , lr(dir) {}
+    MPVS(MPS const& in , int dir = RIGHT) : MPS(in) , lr(dir) {}
+    MPVS(vector<MPS> const& , int dir = RIGHT);
+    int parity() const { return lr; }
+    void reverse();
 };
 
-// general-purpose struct useful in merging step (L,R tensor product) 
-template<typename T>
-struct LRPair {
-    T L,R;
-    LRPair() {}
-    LRPair(const T& LL , const T& RR): L(LL) , R(RR) {}
+// class used for generalized ''dangling-bond'' MPO (matrix product operator space)
+class MPOS : public MPO {
+public:
+    MPOS(MPO const& in) : MPO(in) {}
+    MPOS(SiteSet const& sites) : MPO(sites) {}
+    void reverse();
 };
 
-// class used to interface with ARPACK++ or Davidson solver
-template<class Tensor>
+// class used as interface for iterative solver
 class tensorProdH {
-private:
-    LRPair<Tensor>        ten;
-    LRPair<vector<Real> > dat;
-    LRPair<Real>          scl;
-    LRPair<int>           dim;
-    Tensor                evc;
+using LRTen = pair<ITensor,ITensor>;
+using LRInd = pair<Index,Index>;
+
+protected:
+    const LRTen ten;
+    const LRInd ind;
+    ITensor evc;
 
 public:
-    tensorProdH(LRPair<Tensor> HH) : ten(HH) {
-        dat = LRPair<vector<Real> >(doTask(getReal{},ten.L.store()),doTask(getReal{},ten.R.store()));
-        scl = LRPair<Real>(ten.L.scale().real(),ten.R.scale().real());
-        dim = LRPair<int>(int(findtype(ten.L,Select)),int(findtype(ten.R,Select)));
-        }
-    void product(const Tensor& , Tensor&) const;
-    void MultMv(Real* , Real*);
-    void diag(int , bool = true);
-    int size() const { return dim.L*dim.R; }
-    Tensor eigenvectors() { return evc; }
+    tensorProdH(LRTen& HH) : ten(HH),ind(std::pair(findIndex(HH.first, "Ext,0"),
+                                                   findIndex(HH.second,"Ext,0"))) { }
+    void product(ITensor const& , ITensor&) const;
+    void diag(Index , bool = true);
+    long unsigned int size() const { return int(ind.first)*int(ind.second); }
+    ITensor eigenvectors() const { return evc; }
 };
 
-// utility functions for printing matrices and vectors to stderr
-inline void pvec(const double *vec , int n , int s = 1) {
-    for(int i = 0 ; i < n*s ; i+=s) fprintf(stderr,"%17.14f\n",vec[i]);
-    }
+namespace itensor {
+void plussers(Index const& , Index const& , Index& , ITensor& , ITensor&);
+}
 
-inline void pmat(const double *mat , int n , int m , int ld = 0) {
-    if(ld == 0) ld = m;
-    for(auto i : range(n)) {
-        for(auto j : range(m)) fprintf(stderr,"%7.5f ",mat[i*ld+j]);
-        fprintf(stderr,"\n");
+inline FILE* fopen_safe(const char name[]) {
+    FILE *fl;
+    for(int count = 0 ; !(fl = fopen(name,"a")) && count < 100 ; ++count) {
+        fprintf(stderr,"unable to open output file %s, retrying...\n",name);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
+
+    return fl;
     }
 
-inline void pvec(const vector<Real>& vec , int n , int s = 1) { pvec(&vec[0],n,s); }
-inline void pmat(const vector<Real>& mat , int n , int m , int ld = 0) { pmat(&mat[0],n,m,ld); }
+// util.cc
+void parse_config(std::ifstream& , std::map<string,string>&);
 
-// util.cpp
-void reducedDM(const MPS& , MPO& , int);
+vector<vector<size_t> > block_sizes(string const&);
 
-template<class Tensor>
-Tensor overlapT(const MPSt<Tensor>& , const MPOt<Tensor>& , const MPSt<Tensor>&);
+//template<class Sites>
+void init_H_blocks(AutoMPO const& , vector<MPO>& , vector<SiteSet> const&);
 
-template<class Tensor>
-Tensor overlapT(const MPSt<Tensor>& , const MPSt<Tensor>&);
+Index siteIndex(MPVS const&, int);
 
-template<class Tensor>
-Tensor overlapT(const MPOt<Tensor>& , const MPOt<Tensor>&);
+IndexSet siteInds(MPVS const&);
 
-template<class MPSLike>
-void regauge(MPSLike& , int , Args const&);
+IndexSet siteInds(MPO const&);
 
-template<class Tensor>
-Real measEE(const MPSt<Tensor>& , int);
+MPO sysOp(SiteSet const&, const char*, const Real = 1.);
 
-IQMPO sysOp(const SiteSet& , const char* , const Real = 1.0);
+ITensor inner(MPVS const& , MPO const& , MPVS const&);
 
-template<class Tensor>
-Real measOp(const MPSt<Tensor>& , const IQTensor& , int , const IQTensor& , int);
-
-template<class Tensor>
-Real measOp(const MPSt<Tensor>& , const IQTensor& , int);
-
-template<class Tensor>
-void extractBlocks(AutoMPO const& , vector<MPOt<Tensor> >& ,  const SiteSet&);
-
-template<class Tensor>
-MPSt<Tensor> opFilter(MPSt<Tensor> const& , vector<MPOt<Tensor> > const& , Real , int);
-
-template<class Tensor>
-vector<Real> dmrgMPO(const MPOt<Tensor>& , vector<MPSt<Tensor> >& , int , Args const& = Args::global()); 
-
-template<class MPOType>
-void twoLocalTrotter(MPOType& , double , int , AutoMPO&); 
-
-template<class Tensor>
-double restrictMPO(const MPOt<Tensor>& , MPOt<Tensor>& , int , int , int);
-
-template<class Tensor>
-MPSt<Tensor> applyMPO(MPOt<Tensor> const& , MPSt<Tensor> const& , int , Tensor , Args const& = Args::global());
-
-template<class Tensor>
-MPSt<Tensor> applyMPO(MPOt<Tensor> const& , MPSt<Tensor> const& , int , Args const& = Args::global());
-
-template<class Tensor>
-LRPair<Tensor> tensorProdContract(MPSt<Tensor> const&, MPSt<Tensor> const&, MPOt<Tensor> const&);
-
-template<class Tensor>
-double tensorProduct(const MPSt<Tensor>& , const MPSt<Tensor>& , MPSt<Tensor>& , const Tensor& , int);
+ITensor inner(MPVS const& , MPVS const&);
 
 template<class MPSLike>
-double makeVS(const vector<MPSLike>& , MPSLike& , int);
+void regauge(MPSLike& , int , Args const& = Args::global());
 
-// svdL.cpp
+Real cutEE(MPS const& , int);
+
+Real mutualInfoTwoSite(MPS const& , int , int);
+/*
 template<class Tensor>
-Spectrum svdL(Tensor , Tensor& , Tensor& , Tensor& , Args = Args::global());
+Real measOp(const MPSt<Tensor>& , const ITensor& , int , const ITensor& , int);
+
+template<class Tensor>
+Real measOp(const MPSt<Tensor>& , const ITensor& , int);
+*/
+vector<Real> dmrgMPO(MPO const& , vector<MPS>& , int , Args const& = Args::global()); 
+
+void Trotter(MPO& , double , int , AutoMPO&); 
+
+void evenOddTrotter(MPO& , double , int , AutoMPO&); 
+
+double restrictMPO(MPO const& , MPOS& , int , int , int);
+
+pair<ITensor,ITensor> tensorProdContract(MPVS const&, MPVS const&, MPO const&);
+
+double tensorProduct(MPVS const& , MPVS const& , MPVS& , ITensor const& , int);
+
+MPVS applyMPO(MPOS const&, MPVS const&, Args = Args::global());
 
 #endif
