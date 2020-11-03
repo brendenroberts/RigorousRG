@@ -141,8 +141,6 @@ int main(int argc, char *argv[]) {
             ret.ref(xs) *= U*dag(Dg);
             auto [P,S] = diagPosSemiDef(-inner(ret,Hc,ret),{"Tags","Ext"});
             ret.ref(xs) *= P;
-            //PrintData(inner(ret,ret));
-            //ret.ref(xs) *= 1.0/sqrt(inner(ret,ret).real(ei(1),prime(ei)(1)));
             regauge(ret,xs,{"Cutoff",eps});
 
             time(&t2);
@@ -166,7 +164,7 @@ int main(int argc, char *argv[]) {
             auto tpH = tensorProdContract(spL,spR,Htp);
             tensorProdH resH(tpH);
             if(resH.size() < s) si = Index(resH.size()-1,"Ext");
-            resH.diag(si,doI);
+            resH.diag(si,{"Iterative",doI,"ErrGoal",1e-8,"MaxIter",200*int(si)});
             time(&t2);
             fprintf(stdout,"(ll=%lu) diag restricted H: %.f s ",2*ll,difftime(t2,t1));
 

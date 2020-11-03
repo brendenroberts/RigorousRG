@@ -1,4 +1,4 @@
-# this is a config file for RRG random XYZ model code
+# this is a config file for RRG random XY model code
 N = 48
 n = 6 6 6 6 6 6 6 6
 t = 0.25

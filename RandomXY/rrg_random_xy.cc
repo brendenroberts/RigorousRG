@@ -152,8 +152,6 @@ int main(int argc, char *argv[]) {
             ret.ref(xs) *= U*dag(Dg);
             auto [P,S] = diagPosSemiDef(-inner(ret,Hc,ret),{"Tags","Ext"});
             ret.ref(xs) *= P;
-            //PrintData(inner(ret,ret));
-            //ret.ref(xs) *= 1.0/sqrt(inner(ret,ret).real(ei(1),prime(ei)(1)));
             regauge(ret,xs,{"Cutoff",eps});
 
             time(&t2);
@@ -176,13 +174,13 @@ int main(int argc, char *argv[]) {
             time(&t1);
             auto tpH = tensorProdContract(spL,spR,Htp);
             tensorProdH resH(tpH);
-            resH.diag(si,doI);
+            resH.diag(si,{"Iterative",doI,"ErrGoal",1e-6,"MaxIter",(w == Hs.size()-2 ? 1000 : 200)*int(si)});
             time(&t2);
             fprintf(stdout,"(ll=%lu) diag restricted H: %.f s ",2*ll,difftime(t2,t1));
 
             // STEP 2: tensor viable sets on each side and reduce dimension
-            MPVS ret(SiteSet(siteInds(Htp)) , ll%2 == 1 ? RIGHT : LEFT);
             time(&t1);
+            MPVS ret(SiteSet(siteInds(Htp)) , ll%2 == 1 ? RIGHT : LEFT);
             tensorProduct(spL,spR,ret,resH.eigenvectors(),ll%2);
             time(&t2);
             fprintf(stdout,"tensor product: %.f s\n",difftime(t2,t1));

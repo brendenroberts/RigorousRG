@@ -125,7 +125,7 @@ void MPOS::reverse() {
     }
 
 Index siteIndex(MPVS const& psi, int j) {
-    return findIndex(psi(j),"Site");//uniqueIndex(psi(j),{psi(j-1),psi(j+1)});
+    return findIndex(psi(j),"Site");
     }
 
 IndexSet siteInds(MPVS const& x) {
@@ -314,45 +314,13 @@ Real mutualInfoTwoSite(MPS const& state , int a , int b) {
     return Sa+Sb-Sab;
     }
 
-void Trotter(MPO& eH , double t , int M , AutoMPO& ampo) {
+void Trotter(MPO& eH , double t , size_t M , AutoMPO& ampo) {
     auto evOp = toExpH(ampo,1.0/(t*(double)M));
 
     eH = evOp;
     evOp.prime();
     eH.ref(1) /= norm(eH(1));
-    for(auto i : range1(M-1)) {
-        multiplyMPO(eH,evOp,eH,{"Cutoff",epx});
-        eH.mapPrime(2,1);
-        eH.ref(1) /= norm(eH(1));
-        (void)i;
-        }
-
-    return;
-    }
-
-void evenOddTrotter(MPO& eH , double t , int M , AutoMPO& ampo) {
-    const auto& hs = ampo.sites();
-    ITensor term;
-
-    AutoMPO Hevn(hs),Hodd(hs);
-    for(const auto& ht : ampo.terms()) {
-        auto st = ht.ops;
-        if(st.size() == 1)     st[0].i%2 == 0 ? Hevn.add(ht) : Hodd.add(ht);
-        else std::min(st[0].i,st[1].i)%2 == 0 ? Hevn.add(ht) : Hodd.add(ht);
-        }
-
-    auto Uevn  = toExpH(Hevn,1.0/(t*(double)M));
-    auto Uodd  = toExpH(Hodd,1.0/(t*(double)M));
-    auto Uodd2 = toExpH(Hodd,1.0/(2.0*t*(double)M));
-
-    auto evOp = Uodd2;
-    multiplyMPO(evOp,Uevn,evOp,{"Cutoff",epx*1e-2});
-    multiplyMPO(evOp,Uodd2,evOp,{"Cutoff",epx*1e-2});
-
-    eH = evOp;
-    evOp.prime();
-    eH.ref(1) /= norm(eH(1));
-    for(int i : range(M-1)) {
+    for(auto i = 2u ; i <= M ; ++i) {
         multiplyMPO(eH,evOp,eH,{"Cutoff",epx});
         eH.mapPrime(2,1);
         eH.ref(1) /= norm(eH(1));

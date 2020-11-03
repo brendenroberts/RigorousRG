@@ -70,7 +70,7 @@ public:
     tensorProdH(LRTen& HH) : ten(HH),ind(std::pair(findIndex(HH.first, "Ext,0"),
                                                    findIndex(HH.second,"Ext,0"))) { }
     void product(ITensor const& , ITensor&) const;
-    void diag(Index , bool = true);
+    void diag(Index , Args const& = Args::global());
     long unsigned int size() const { return int(ind.first)*int(ind.second); }
     ITensor eigenvectors() const { return evc; }
 };
@@ -124,9 +124,7 @@ Real measOp(const MPSt<Tensor>& , const ITensor& , int);
 */
 vector<Real> dmrgMPO(MPO const& , vector<MPS>& , int , Args const& = Args::global()); 
 
-void Trotter(MPO& , double , int , AutoMPO&); 
-
-void evenOddTrotter(MPO& , double , int , AutoMPO&); 
+void Trotter(MPO& , double , size_t , AutoMPO&); 
 
 double restrictMPO(MPO const& , MPOS& , int , int , int);
 
