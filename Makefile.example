@@ -1,12 +1,12 @@
 # Adapted Makefile from ITensor examples
 ITENSOR_DIR=/path/to/itensor
+
+#################################################################
+#################################################################
+#################################################################
+#################################################################
+
 HEADERS=rrg.h
-
-#################################################################
-#################################################################
-#################################################################
-#################################################################
-
 CCFILES=util.cc tensorProdH.cc
 C2FLAGS= -I. -Wno-unused-function
 
@@ -27,14 +27,14 @@ OBJECTS=$(patsubst %.cc,%.o, $(CCFILES))
 
 build: $(APP)
 
-build: ising random_xy
+build: rrg_ising rrg_random_xy
 
-all: ising random_xy
+all: rrg_ising rrg_random_xy
 
-ising: $(ITENSOR_LIBS) $(TENSOR_HEADERS)
+rrg_ising: $(ITENSOR_LIBS) $(TENSOR_HEADERS)
 	$(CCCOM) $(CCFLAGS) Ising/rrg_ising.cc $(CCFILES) -o rrg_ising $(LIBFLAGS)
 
-random_xy: $(ITENSOR_LIBS) $(TENSOR_HEADERS)
+rrg_random_xy: $(ITENSOR_LIBS) $(TENSOR_HEADERS)
 	$(CCCOM) $(CCFLAGS) RandomXY/rrg_random_xy.cc $(CCFILES) -o rrg_random_xy $(LIBFLAGS)
 
 clean:

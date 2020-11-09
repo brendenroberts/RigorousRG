@@ -1,5 +1,6 @@
 #include "rrg.h"
 #include "itensor/mps/mps.cc"
+#include "itensor/mps/mpoalgs.cc"
 
 struct getReal {};
 vector<Real,itensor::uninitialized_allocator<Real>> doTask(getReal, QDiag<Real> const& d) { return d.store; }
@@ -138,7 +139,7 @@ IndexSet siteInds(MPVS const& x) {
     return inds.build();
     }
 
-Index uniqueSiteIndex(MPOS const& W, MPVS const& A, int b) {
+Index uniqueSiteIndex(MPO const& W, MPVS const& A, int b) {
     return uniqueIndex(W(b),{W(b-1),W(b+1),A(b)},"Site");
     }
 
@@ -329,8 +330,34 @@ void Trotter(MPO& eH , double t , size_t M , AutoMPO& ampo) {
 
     return;
     }
+/*
+vector<double> dmrgMPO(MPO const& H , vector<MPS>& states , int num_sw, Args const& args) {
+    auto do_exclude = args.getBool("Exclude",true);
+    auto penalty = args.getReal("Penalty",1.0);
+    auto err = args.getReal("Cutoff",1e-16);
+    vector<MPS> exclude;
+    vector<double> evals;
 
-std::tuple<ITensor,ITensor> sliceMPO(MPO const& O, MPOS& P, int ls , int rs , int m = 0) {
+    for(auto& psi : states) {
+        auto swp = Sweeps(num_sw);
+        swp.maxdim() = MAXBD;
+        swp.cutoff() = err*1e2,err*1e2,err*1e1,err*1e1,err;
+        swp.niter() = 6;
+        swp.noise() = 0.0;
+
+        std::stringstream ss;
+        auto out = std::cout.rdbuf(ss.rdbuf());
+        auto e = dmrg(psi,H,exclude,swp,{"Quiet",true,"PrintEigs",false,"Weight",penalty});
+        std::cout.rdbuf(out);
+
+        if(do_exclude) exclude.push_back(psi);
+        evals.push_back(e);
+        }
+
+    return evals;
+    }
+*/
+tuple<ITensor,ITensor> sliceMPO(MPO const& O, MPOS& P, int ls , int rs , int m = 0) {
     const auto N = length(O) , n = length(P);
     MPOS M(O);
     ITensor T,U,S,V,SL,SR;
@@ -478,7 +505,12 @@ pair<ITensor,ITensor> tensorProdContract(MPVS const& psiL, MPVS const& psiR, MPO
     return std::make_pair(L,R);
     }
 
-double tensorProduct(MPVS const& psiL, MPVS const& psiR, MPVS& ret, ITensor const& W, int lr) {
+void tensorProduct(MPVS const& psiL,
+                     MPVS const& psiR,
+                     MPVS& ret,
+                     ITensor const& W,
+                     int lr,
+                     bool move) {
     const int N = length(ret) , nL = length(psiL) , nR = length(psiR);
     const int n = lr==RIGHT ? nL : nR; 
     Index ai,ei;
@@ -490,6 +522,7 @@ double tensorProduct(MPVS const& psiL, MPVS const& psiR, MPVS& ret, ITensor cons
         ret.set(i,replaceInds(psiL(i),{siteIndex(psiL,i)},{siteIndex(ret,i)}));
     for(int i : range1(nR))
         ret.set(nL+i,replaceInds(psiR(i),{siteIndex(psiR,i)},{siteIndex(ret,nL+i)}));
+    ret.position(nL,{"Cutoff",epx});
 
     // Move selection index from middle to edge
     for(int i : range(n)) {
@@ -498,28 +531,29 @@ double tensorProduct(MPVS const& psiL, MPVS const& psiR, MPVS& ret, ITensor cons
         T = i == 0 ? ret(x)*W*ret(x+1) : ret(x)*ret(x+1);
         if(i == 0) { sortExt(T); ei = findIndex(T,"Ext"); }
         U = lr==RIGHT && ei ? ITensor(siteIndex(ret,x),ai,ei) : ITensor(siteIndex(ret,x),ai);
-        time(&t1);
-        svd(T,U,S,V,{"Cutoff",1e-18});
-        time(&t2); ctime += difftime(t2,t1);
+        svd(T,U,S,V,{"Cutoff",eps});
         ret.set(x,lr ? U*S : U);
         ret.set(x+1,lr ? V : S*V);
+        if(!move) return;
         }
-    regauge(ret,lr == RIGHT ? 1 : N,{"Cutoff",eps});
- 
-    return ctime; 
+    ret.leftLim(lr == RIGHT ? 0 : N-1);
+    ret.rightLim(lr == RIGHT ? 2 : N+1);
+    //regauge(ret,lr == RIGHT ? 1 : N,{"Cutoff",eps});
+
+    return; 
     }
 
 MPVS
-densityMatrixApplyMPOImpl(MPOS const& K,
+densityMatrixApplyMPOImpl(MPO const& K,
                           MPVS const& x,
                           Args args = Args::global());
-
+/*
 void
 fitApplyMPOImpl(MPVS const& psi,
-                MPOS const& K,
+                MPO const& K,
                 MPVS & res,
                 Args const& args = Args::global());
-
+*/
 MPVS
 applyMPO(MPOS const& K_in,
          MPVS const& x_in,
@@ -570,7 +604,47 @@ applyMPO(MPOS const& K_in,
     }
 
 MPVS
-densityMatrixApplyMPOImpl(MPOS const& K,
+applyMPO(MPO const& K_in,
+         MPVS const& x_in,
+         Args args)
+    {
+    if( !x_in ) Error("Error in applyMPO, MPS is uninitialized.");
+    if( !K_in ) Error("Error in applyMPO, MPO is uninitialized.");
+
+    auto method = args.getString("Method","DensityMatrix");
+    if(!args.defined("RespectDegenerate")) args.add("RespectDegenerate",true);
+
+    auto x = x_in;
+    auto K = K_in;
+
+    MPVS res;
+    if(method == "DensityMatrix")
+        {
+        res = densityMatrixApplyMPOImpl(K,x,args);
+        }
+    else if(method == "Fit")
+        {
+/*
+        // Use the input MPS x to be applied as the
+        // default starting state
+        // TODO: consider using zipUpApplyMPOImpl as 
+        // a way to get a better starting state
+        auto sites = uniqueSiteInds(K,x);
+        res = replaceSiteInds(x,sites);
+        //res = x;
+        fitApplyMPOImpl(x,K,res,args);
+        }
+    else
+        {
+*/
+        Error("applyMPO currently supports the following methods: 'DensityMatrix', 'Fit'");
+        }
+
+    return res;
+    }
+
+MPVS
+densityMatrixApplyMPOImpl(MPO const& K,
                           MPVS const& psi,
                           Args args)
     {
@@ -597,6 +671,8 @@ densityMatrixApplyMPOImpl(MPOS const& K,
 
     auto N = length(psi);
 
+    /**/ auto [eI,eSite] = findExt(psi);
+
     for( auto n : range1(N) )
       {
       if( commonIndex(psi(n),K(n)) != siteIndex(psi,n) )
@@ -613,6 +689,9 @@ densityMatrixApplyMPOImpl(MPOS const& K,
     //TODO: use sim(linkInds), sim(siteInds)
     psic.dag().prime(rand_plev);
     Kc.dag().prime(rand_plev);
+    psic.ref(eSite).noPrime("Ext");
+
+    //Print(psic);
 
     // Make sure the original and conjugates match
     for(auto j : range1(N-1))
@@ -625,6 +704,7 @@ densityMatrixApplyMPOImpl(MPOS const& K,
     for(int j = 2; j < N; ++j)
         {
         E[j] = E[j-1]*psi(j)*K(j)*Kc(j)*psic(j);
+        //Print(E[j]);
         }
     if(verbose) println("done");
 

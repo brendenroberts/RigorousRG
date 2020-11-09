@@ -8,29 +8,45 @@
 #include <string>
 #include <algorithm>
 #include <cmath>
-#include <ctime>
+#include <fstream>
+#include <iostream>
+#include <iomanip>
+#include <chrono>
+#include <thread>
 #include <map>
 
 #define LEFT  0
 #define RIGHT 1
-#define MAXBD 800
+#define MAXBD 1000
 #define args(x) range(x.size())
 
 using namespace itensor;
 using std::vector;
 using std::string;
+using std::tuple;
 using std::pair;
 
 // error threshold for most dangling-bond operations
 const Real eps = 1E-10;
 // more sensitive threshold for single MPS or MPO
-const Real epx = 1E-14;
+const Real epx = 1E-16;
 
 inline Index extIndex(ITensor const& A , string tag = "Ext") {
     if(hasQNs(A))
         return Index(QN({-div(A)}),1,tag);
     else
         return Index(1,tag);
+    }
+
+inline tuple<Index,int> findExt(MPS const& psi) {
+    auto ret = Index();
+    auto i = 0;
+
+    for(i = 0 ; i < length(psi) ; ++i)
+        if(ret = findIndex(psi(i),"Ext"))
+            break;
+
+    return {ret,i};
     }
 
 // class used for generalized ''dangling-bond'' MPS (matrix product vector space)
@@ -122,7 +138,7 @@ Real measOp(const MPSt<Tensor>& , const ITensor& , int , const ITensor& , int);
 template<class Tensor>
 Real measOp(const MPSt<Tensor>& , const ITensor& , int);
 */
-vector<Real> dmrgMPO(MPO const& , vector<MPS>& , int , Args const& = Args::global()); 
+//vector<double> dmrgMPO(MPO const& , vector<MPS>& , int , Args const& = Args::global()); 
 
 void Trotter(MPO& , double , size_t , AutoMPO&); 
 
@@ -130,8 +146,10 @@ double restrictMPO(MPO const& , MPOS& , int , int , int);
 
 pair<ITensor,ITensor> tensorProdContract(MPVS const&, MPVS const&, MPO const&);
 
-double tensorProduct(MPVS const& , MPVS const& , MPVS& , ITensor const& , int);
+void tensorProduct(MPVS const& , MPVS const& , MPVS& , ITensor const& , int, bool = true);
 
 MPVS applyMPO(MPOS const&, MPVS const&, Args = Args::global());
+
+MPVS applyMPO(MPO const&, MPVS const&, Args = Args::global());
 
 #endif

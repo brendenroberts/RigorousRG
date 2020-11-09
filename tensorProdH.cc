@@ -33,8 +33,9 @@ void tensorProdH::diag(Index si , Args const& args) {
     auto doI = args.getBool("Iterative",true);
 
     fprintf(stdout,"dim H = %lu... \n",N);
-    if(doI || N >= 15000) { // iterative diag
-        if(N >= 15000 && !doI) fprintf(stderr,"H too large, iterative diag\n");
+    if(doI || N >= static_cast<size_t>(12000*nblock(si))) { // iterative diag
+        if(N >= 12000*static_cast<size_t>(nblock(si)) && !doI)
+            fprintf(stderr,"H too large, iterative diag\n");
         
         auto iset = IndexSet(dag(ind.first),dag(ind.second)); 
 	    auto ret = diagTen(*this,si,iset,args);
@@ -44,7 +45,27 @@ void tensorProdH::diag(Index si , Args const& args) {
             evc += A;
             }
     } else { // dense matrix diag routine, limited to low dimensional local spaces
-        evc = std::get<0>(diagPosSemiDef(-(ten.first*ten.second),{"MaxDim",s,"Tags","Ext"}));
+        auto bigTensor = -(ten.first*ten.second);
+        evc = std::get<0>(diagPosSemiDef(bigTensor,{"Truncate",false,"Tags","Ext"}));
+        auto eI = uniqueIndex(evc,bigTensor);
+        auto A = ITensor(si,dag(eI));
+        if(hasQNs(si)) {
+            auto offsetS = 0;
+            for(auto q : range1(nblock(si))) {
+                auto offsetE = 0;
+                for(auto r : range1(nblock(eI))) {
+                    if(qn(si,q) == qn(eI,r))
+                        for(auto i : range1(blocksize(si,q)))
+                            A.set(si(offsetS+i),dag(eI)(offsetE+i),1.0);
+                    offsetE += blocksize(eI,r);
+                    }
+                offsetS += blocksize(si,q);
+                }
+        } else
+            for(auto i : range1(s))
+                A.set(si(i),dag(eI)(i),1.0);
+
+        evc *= A;
         }
     evc.dag();
 
