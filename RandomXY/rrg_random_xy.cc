@@ -1,8 +1,6 @@
 #include "rrg.h"
 #include "itensor/mps/sites/fermion.h"
-#include <sys/file.h>
 #include <random>
-#include <thread>
 
 int main(int argc, char *argv[]) {
     if(argc != 2) { fprintf(stderr,"usage: %s config_file\n",argv[0]); return 1; }
