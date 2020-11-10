@@ -31,10 +31,11 @@ void tensorProdH::diag(Index si , Args const& args) {
     auto N = size();
     auto s = int(si);
     auto doI = args.getBool("Iterative",true);
-
+    auto nBlocks = hasQNs(si) ? static_cast<size_t>(nblock(si)) : 1lu;
+    
     fprintf(stdout,"dim H = %lu... \n",N);
-    if(doI || N >= static_cast<size_t>(12000*nblock(si))) { // iterative diag
-        if(N >= 12000*static_cast<size_t>(nblock(si)) && !doI)
+    if(doI || N >= 12000*nBlocks) { // iterative diag
+        if(N >= 12000*nBlocks && !doI)
             fprintf(stderr,"H too large, iterative diag\n");
         
         auto iset = IndexSet(dag(ind.first),dag(ind.second)); 

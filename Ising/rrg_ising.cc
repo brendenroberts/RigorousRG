@@ -1,13 +1,11 @@
 #include "rrg.h"
 #include "itensor/mps/sites/spinhalf.h"
-#include <sys/file.h>
-#include <chrono>
 #include <thread>
 
 int main(int argc, char *argv[]) {
     if(argc != 2) { fprintf(stderr,"usage: %s config_file\n",argv[0]); return 1; }
+    std::ostringstream ss;
     std::map<string,string> inp;
-    time_t t1,t2,tI,tF;
     
     std::ifstream cfile;
     cfile.open(argv[1],std::ios::in);
@@ -28,19 +26,22 @@ int main(int argc, char *argv[]) {
     const double h = stod(inp.at("h")); // longitudinal field strength
  
     // computational settings
-    const bool   doI = true; // diag restricted Hamiltonian iteratively?
-    const auto   thr = 1e-14; // PCA threshold for sampled states
+    const bool   doI = false; // diag restricted Hamiltonian iteratively?
+    const auto   thr = 1e-8; // PCA threshold for sampled states
 
-    // file output (TODO: change to C++ style io)
-    FILE *gsfl;
-    char id[256],gsnm[256];
-    auto id_inp = inp.find("id");
-    if(id_inp == inp.end()) sprintf(id,"rrg-L%lu-s%lu-D%lu",N,s,D);
-    else sprintf(id,"%s",(*id_inp).second.c_str());
-    strcpy(gsnm,id); strcat(gsnm,"_gs.dat");
+    // output filenames
+    auto inputId = inp.find("id");
+    ss.setf(std::ios::fixed);
+    ss.fill('0');
+    if(inputId == inp.end())
+        ss << argv[0] << "_N" << std::setw(3) << N << "_s" << std::setw(2) << s << "_D" << std::setw(2) << D;
+    else ss << (*inputId).second;
+    auto id = ss.str();
+    std::ostringstream().swap(ss);
 
     // initialize hierarchy structure, generate product basis for initial blocking
-    // use Fermion Hilbert space for sites, since we only conserve parity
+    auto tI = std::chrono::high_resolution_clock::now();
+    auto t1 = std::chrono::high_resolution_clock::now();
     auto blockNs = block_sizes(inp.at("n"));
     if(blockNs.back().back() != N) { Error("sum(n) not equal to N"); }
     vector<vector<SiteSet> > hsps;
@@ -84,7 +85,6 @@ int main(int argc, char *argv[]) {
         }
 
     // generate AGSP thermal operator exp(-H/t) using Trotter
-    time(&tI);
     MPO K(hs);
     Trotter(K,t,M,autoH);    
     K.ref(1) *= pow(2,N/2);
@@ -100,15 +100,15 @@ int main(int argc, char *argv[]) {
         cur.ref(xs) *= P;
         regauge(cur,xs,{"Cutoff",1e-18});
         }
-    time(&t2);
-    fprintf(stdout,"initialization: %.f s\n",difftime(t2,tI));
+    auto t2 = std::chrono::high_resolution_clock::now();
+    auto tInit = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
+    fprintf(stdout,"initialization: %.f s\n",tInit.count());
  
     // ITERATION: proceed through RRG hierarchy, increasing the scale m
     vector<MPVS> Spost;
-    //for(auto itH = Hs.begin() ; itH != Hs.end()-1 ; ++itH) {
-    for(auto w : args(Hs)) {
-        if(w == Hs.size()-1) break;
-        fprintf(stdout,"Level %lu\n",w);
+    auto nLevels = blockNs.size();
+    for(auto w  = 0u ; w < nLevels-1 ; ++w) {
+        fprintf(stdout,"Level %u\n",w);
         const auto& Hl = Hs.at(w);
         int offset = 0;
 
@@ -122,29 +122,31 @@ int main(int argc, char *argv[]) {
             auto xs = pre.parity() == RIGHT ? 1 : length(pre);
 
             // STEP 1: extract filtering operators A from AGSP K
-            time(&t1);
+            t1 = std::chrono::high_resolution_clock::now();
             restrictMPO(K,A,offset+1,D,pre.parity());
-            time(&t2);
-            fprintf(stdout,"trunc AGSP: %.f s ",difftime(t2,t1));
- 
+            t2 = std::chrono::high_resolution_clock::now();
+            auto tRes = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
+            fprintf(stdout,"trunc AGSP: %.f s ",tRes.count());
+
             // STEP 2: expand subspace using the mapping A:pre->ret
-            time(&t1);
+            t1 = std::chrono::high_resolution_clock::now();
             ret = applyMPO(A,pre,{"Cutoff",eps,"MaxDim",MAXBD});
-            time(&t2);
-            fprintf(stdout,"apply AGSP: %.f s ",difftime(t2,t1));
+            t2 = std::chrono::high_resolution_clock::now();
+            auto tApp = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
+            fprintf(stdout,"apply AGSP: %.f s ",tApp.count());
 
             // rotate into principal components of subspace, possibly reducing dimension
             // and stabilizing numerics, then store subspace in eigenbasis of block H
-            time(&t1);
+            t1 = std::chrono::high_resolution_clock::now();
             auto [U,Dg] = diagPosSemiDef(inner(ret,ret),{"Cutoff",thr,"Tags","Ext"});
             Dg.apply([](Real r) {return 1.0/sqrt(r);});
             ret.ref(xs) *= U*dag(Dg);
             auto [P,S] = diagPosSemiDef(-inner(ret,Hc,ret),{"Tags","Ext"});
             ret.ref(xs) *= P;
             regauge(ret,xs,{"Cutoff",eps});
-
-            time(&t2);
-            fprintf(stdout,"rotate MPS: %.f s\n",difftime(t2,t1));
+            t2 = std::chrono::high_resolution_clock::now();
+            auto tRot = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
+            fprintf(stdout,"rotate MPS: %.f s\n",tRot.count());
 
             offset += length(pre);
             Spost.push_back(ret);
@@ -160,56 +162,66 @@ int main(int argc, char *argv[]) {
             auto si = Index(s,"Ext");
 
             // STEP 1: find s lowest eigenpairs of restricted H
-            time(&t1);
+            t1 = std::chrono::high_resolution_clock::now();
             auto tpH = tensorProdContract(spL,spR,Htp);
             tensorProdH resH(tpH);
             if(resH.size() < s) si = Index(resH.size()-1,"Ext");
-            resH.diag(si,{"Iterative",doI,"ErrGoal",1e-8,"MaxIter",200*int(si)});
-            time(&t2);
-            fprintf(stdout,"(ll=%lu) diag restricted H: %.f s ",2*ll,difftime(t2,t1));
+            resH.diag(si,{"Iterative",w == nLevels-2 ? false : doI,"ErrGoal",1e-8,"MaxIter",200*s});
+            t2 = std::chrono::high_resolution_clock::now();
+            auto tDiag = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
+            fprintf(stdout,"(ll=%lu) diag restricted H: %.f s ",2*ll,tDiag.count());
 
             // STEP 2: tensor viable sets on each side and reduce dimension
+            t1 = std::chrono::high_resolution_clock::now();
             MPVS ret(SiteSet(siteInds(Htp)) , ll%2 == 1 ? RIGHT : LEFT);
-            time(&t1);
-            tensorProduct(spL,spR,ret,resH.eigenvectors(),ll%2);
-            time(&t2);
-            fprintf(stdout,"tensor product: %.f s\n",difftime(t2,t1));
+            tensorProduct(spL,spR,ret,resH.eigenvectors(),ll%2,w!=nLevels-2);
+            t2 = std::chrono::high_resolution_clock::now();
+            auto tTens = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
+            fprintf(stdout,"tensor product: %.f s\n",tTens.count());
 
             Spre.push_back(ret);
             }
         }
-    time(&t2);
+    auto tF = std::chrono::high_resolution_clock::now();
+    auto tRRG = std::chrono::duration_cast<std::chrono::duration<double>>(tF - tI);
+    fprintf(stdout,"rrg elapsed: %.f s\n",tRRG.count());
     fflush(stdout);
 
-    // EXIT: save numerical low-energy spectrum
+    // CLEANUP: do rounds of TEBD in order to improve final states
     auto res = Spre[0];
-    auto [P,S] = diagHermitian(-inner(res,H,res),{"Tags","Ext"});
-    res.ref(N) *= P;
-    auto ei = findIndex(res.ref(N),"Ext");
-
-    vector<MPS> evecs(dim(ei));
-    vector<double> evals;
-    for(auto i : range1(dim(ei))) {
-        auto fc = MPS(res);
-        fc.ref(N) *= setElt(ei(i));
-        fc.position(1);
-        fc.orthogonalize({"Cutoff",1e-16,"RespectDegenerate",true,"MaxDim",MAXBD});
-        fc.normalize();
-        evecs.at(i-1) = fc;
+    auto [ei,eSite] = findExt(res);
+    auto e0 = 0.0 , e1 = 0.0;
+    for(auto i : range(8)) {
+        res = applyMPO(K,res,{"Cutoff",eps,"MaxDim",MAXBD});
+        auto [U,Dg] = diagPosSemiDef(inner(res,res),{"Truncate",false,"Tags","Ext"});
+        Dg.apply([](Real r) {return 1.0/sqrt(r);});
+        res.ref(eSite) *= U*dag(Dg);
+        res.ref(eSite).noPrime();
+        auto [P,S] = diagPosSemiDef(-inner(res,H,res),{"Tags","Ext"});
+        res.ref(eSite) *= P;
+        ei = findIndex(res(eSite),"Ext");
+        e0 = -S.elt(ei(1),prime(ei)(1)) , e1 = -S.elt(ei(2),prime(ei)(2));
+        fprintf(stderr,"gs: %.8f gap: %.8f\n",e0,e1-e0);
         }
-    for(auto const& psi : evecs) evals.push_back(inner(psi,H,psi));
 
-    fprintf(stdout,"rrg elapsed: %.f s\ngs energy %17.14f\n",difftime(t2,tI),evals.front());
-    fflush(stdout);
+    // EXIT: write out spectral data, save low-energy states to disk
+    ss << id << "_sites.dat";
+    auto sitesFilename = ss.str();
+    std::ostringstream().swap(ss);
+    writeToFile(sitesFilename,hs);
+    std::cout << "Low-energy spectrum:" << std::endl;
+    for(auto i : range1(int(ei))) {
+        auto fc = MPS(res);
+        fc.ref(eSite) *= setElt(dag(ei)(i));
+        fc.orthogonalize({"Cutoff",epx,"RespectDegenerate",true,"MaxDim",MAXBD});
+        fc.normalize();
+        ss.fill('0');
+        std::cout << std::setprecision(10) << inner(fc,H,fc) << std::endl;
+        ss << id << "_state" << std::setw(2) << i-1 << ".dat";
+        auto stateFilename = ss.str();
+        std::ostringstream().swap(ss);
+        writeToFile(stateFilename,fc);
+        }
 
-    gsfl = fopen_safe(gsnm);
-    flock(fileno(gsfl),LOCK_EX);
-    fprintf(gsfl,"# RRG spectrum (L=%lu s=%lu D=%lu)\n",N,s,D);
-    for(auto const& v : evals) fprintf(gsfl,"%14.12f ",v);
-    fprintf(gsfl,"\n");
-    flock(fileno(gsfl),LOCK_UN);
-    fclose(gsfl);
-
-    return 0;
-    
+    return 0;  
     }

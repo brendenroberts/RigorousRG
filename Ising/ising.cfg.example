@@ -1,11 +1,11 @@
 # this is a config file for RRG random XYZ model code
 N = 128
 n = 8 8 8 8 8 8 8 8 8 8 8 8 8 8 8 8
-t = 0.25
-M = 200
-s = 24
-D = 6
+t = 0.5
+M = 300
+s = 32
+D = 4
 J = 1.0
 g = -1.05
 h = 0.5
-id = ising
+id = rrg_ising_J1.00_g-1.05_h0.50

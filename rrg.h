@@ -42,7 +42,7 @@ inline tuple<Index,int> findExt(MPS const& psi) {
     auto ret = Index();
     auto i = 0;
 
-    for(i = 0 ; i < length(psi) ; ++i)
+    for(i = 1 ; i <= length(psi) ; ++i)
         if(ret = findIndex(psi(i),"Ext"))
             break;
 
