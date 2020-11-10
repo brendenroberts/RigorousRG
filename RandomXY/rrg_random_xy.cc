@@ -213,7 +213,7 @@ int main(int argc, char *argv[]) {
     double eGs = 0.0 , e1 = 0.0 , e2 = 0.0 , eTh = 0.0;
     for(auto i : range(N)) {
         res = applyMPO(K,res,{"Cutoff",eps,"MaxDim",MAXBD});
-        auto [U,Dg] = diagPosSemiDef(inner(res,res),{"Cutoff",thr,"Tags","Ext"});
+        auto [U,Dg] = diagPosSemiDef(inner(res,res),{"Truncate",false,"Tags","Ext"});
         Dg.apply([](Real r) {return 1.0/sqrt(r);});
         res.ref(eSite) *= U*dag(Dg);
         res.ref(eSite).noPrime();
