@@ -33,10 +33,10 @@ void tensorProdH::diag(Index si , Args const& args) {
     auto doI = args.getBool("Iterative",true);
     auto nBlocks = hasQNs(si) ? static_cast<size_t>(nblock(si)) : 1lu;
     
-    fprintf(stdout,"dim H = %lu... \n",N);
-    if(doI || N >= 12000*nBlocks) { // iterative diag
-        if(N >= 12000*nBlocks && !doI)
-            fprintf(stderr,"H too large, iterative diag\n");
+    std::cout << "dim H = " << N << "..." << std::endl;
+    if(doI || N >= MAX_TEN_DIM*nBlocks) { // iterative diag
+        if(N >= MAX_TEN_DIM*nBlocks && !doI)
+            std::cout << "H too large, iterative diag" << std::endl;
         
         auto iset = IndexSet(dag(ind.first),dag(ind.second)); 
 	    auto ret = diagTen(*this,si,iset,args);

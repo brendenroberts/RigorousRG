@@ -1,49 +1,53 @@
 #include "rrg.h"
 #include "itensor/mps/sites/spinhalf.h"
-#include <thread>
 
 int main(int argc, char *argv[]) {
-    if(argc != 2) { fprintf(stderr,"usage: %s config_file\n",argv[0]); return 1; }
+    if(argc != 2) { std::cerr << "usage: " << argv[0] << " config_file" << std::endl; return 1; }
     std::ostringstream ss;
-    std::map<string,string> inp;
+    std::map<string,string> configParams;
+    std::ofstream logFile;
+    std::cout.fill('0');
     
-    std::ifstream cfile;
-    cfile.open(argv[1],std::ios::in);
-    if(cfile.is_open()) parse_config(cfile,inp);
-    else { fprintf(stderr,"error opening config file\n"); return 1; }
-    cfile.close();
+    std::ifstream configFile;
+    configFile.open(argv[1]);
+    if(configFile.is_open()) parse_config(configFile,configParams);
+    else { std::cerr << "error opening config file" << std::endl; return 1; }
+    configFile.close();
 
     // RRG & AGSP parameters
-    const size_t N = stoul(inp.at("N")); // system size
-    const double t = stod(inp.at("t"));  // Trotter temperature
-    const size_t M = stoul(inp.at("M")); // num Trotter steps
-    const size_t s = stoul(inp.at("s")); // formal s param
-    const size_t D = stoul(inp.at("D")); // formal D param
-   
-    // Hamitonian parameters
-    const double J = stod(inp.at("J")); // Ising interaction strength
-    const double g = stod(inp.at("g")); // transverse field strength
-    const double h = stod(inp.at("h")); // longitudinal field strength
- 
+    const size_t N = stoul(configParams.at("N")); // system size
+    const double t = stod(configParams.at("t"));  // AGSP temperature
+    const size_t M = stoul(configParams.at("M")); // num Trotter steps
+    const size_t s = stoul(configParams.at("s")); // formal s param
+    const size_t D = stoul(configParams.at("D")); // formal D param
+    
     // computational settings
-    const bool   doI = false; // diag restricted Hamiltonian iteratively?
-    const auto   thr = 1e-8; // PCA threshold for sampled states
+    const bool   doI = true; // diag restricted Hamiltonian iteratively?
+    const auto   thr = 1e-8;  // PCA threshold for sampled states
 
-    // output filenames
-    auto inputId = inp.find("id");
+    // IO stream stuff for setting up output filenames
+    auto configId = configParams.find("id");
     ss.setf(std::ios::fixed);
     ss.fill('0');
-    if(inputId == inp.end())
+    if(configId == configParams.end())
         ss << argv[0] << "_N" << std::setw(3) << N << "_s" << std::setw(2) << s << "_D" << std::setw(2) << D;
-    else ss << (*inputId).second;
+    else ss << (*configId).second;
     auto id = ss.str();
+    if(configParams.find("log") != configParams.end())
+        if(auto doLog = configParams.at("log") ; doLog == "true" || doLog == "True" || doLog == "1") {
+            ss << ".log";
+            auto logFilename = ss.str();
+            std::cout << "writing output to " << logFilename << std::endl;
+            logFile.open(logFilename);
+            std::cout.rdbuf(logFile.rdbuf()); // redirect cout to log file buffer
+            }
     std::ostringstream().swap(ss);
 
     // initialize hierarchy structure, generate product basis for initial blocking
     auto tI = std::chrono::high_resolution_clock::now();
     auto t1 = std::chrono::high_resolution_clock::now();
-    auto blockNs = block_sizes(inp.at("n"));
-    if(blockNs.back().back() != N) { Error("sum(n) not equal to N"); }
+    auto blockNs = block_sizes(configParams.at("n"));
+    if(blockNs.back().back() != N) { std::cerr << "sum(n) not equal to N" << std::endl; return 1; }
     vector<vector<SiteSet> > hsps;
     for(auto const& v : blockNs) {
         hsps.push_back(vector<SiteSet>());
@@ -52,15 +56,20 @@ int main(int argc, char *argv[]) {
             hsps.back().push_back(cur);
             }
         }
-    
+
+    // Hamitonian parameters
+    const double J = stod(configParams.at("J")); // Ising interaction strength
+    const double g = stod(configParams.at("g")); // transverse field strength
+    const double h = stod(configParams.at("h")); // longitudinal field strength
+
     // create MPO for H with open boundary conditions, also block Hamiltonians
     auto const& hs = hsps.back().back();
     AutoMPO autoH(hs);
-    for(auto i = 1 ; static_cast<size_t>(i) <= N ; ++i) {
-        if(static_cast<size_t>(i) != N)
-            autoH += -J*4.0,"Sz",i,"Sz",i+1;
-        autoH += -g*2.0,"Sx",i;
-        autoH += -h*2.0,"Sz",i;
+    for(auto i = 0 ; static_cast<size_t>(i) < N ; ++i) {
+        if(static_cast<size_t>(i) != N-1)
+            autoH += -J*4.0,"Sz",i+1,"Sz",i+2;
+        autoH += -g*2.0,"Sx",i+1;
+        autoH += -h*2.0,"Sz",i+1;
         }
     auto H = toMPO(autoH,{"Exact",true});
     vector<vector<MPO> > Hs(hsps.size());
@@ -73,10 +82,10 @@ int main(int argc, char *argv[]) {
         auto n = int(length(hsps.front().at(a)));
         auto p = int(pow(2,n));
         vector<MPS> V;
-        for(int i : range(p)) {
+        for(auto i : range(p)) {
             InitState istate(hsps.front().at(a),"Up");
-            for(int j : range1(n))
-                if(i/(int)pow(2,j-1)%2) istate.set(j,"Dn");
+            for(auto j : range1(n))
+                if(i/int(pow(2,j-1))%2 == 1) istate.set(j,"Dn");
             auto st = MPS(istate);
             V.push_back(st);
             }
@@ -88,7 +97,7 @@ int main(int argc, char *argv[]) {
     MPO K(hs);
     Trotter(K,t,M,autoH);    
     K.ref(1) *= pow(2,N/2);
-    fprintf(stderr,"maximum AGSP bond dim = %d\n",maxLinkDim(K));
+    std::cout << "maximum AGSP bond dim = " << maxLinkDim(K) << std::endl;
 
     // INITIALIZATION: reduce dimension by sampling from initial basis
     for(auto ll : args(Spre)) {
@@ -96,25 +105,26 @@ int main(int argc, char *argv[]) {
         auto xs = cur.parity() == RIGHT ? 1 : length(cur);
        
         // return orthonormal basis of evecs
-        auto [P,S] = diagPosSemiDef(-inner(cur,Hs.at(0).at(ll),cur),{"MaxDim",2*s,"Tags","Ext"});
+        auto [P,S] = diagPosSemiDef(-inner(cur,Hs.at(0).at(ll),cur),{"MaxDim",s,"Tags","Ext"});
         cur.ref(xs) *= P;
-        regauge(cur,xs,{"Cutoff",1e-18});
+        regauge(cur,xs,{"Cutoff",0.0});
         }
     auto t2 = std::chrono::high_resolution_clock::now();
     auto tInit = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
-    fprintf(stdout,"initialization: %.f s\n",tInit.count());
+    std::cout << "initialization: " << std::fixed <<std::setprecision(0) << tInit.count() << " s" << std::endl;
  
     // ITERATION: proceed through RRG hierarchy, increasing the scale m
     vector<MPVS> Spost;
     auto nLevels = blockNs.size();
     for(auto w  = 0u ; w < nLevels-1 ; ++w) {
-        fprintf(stdout,"Level %u\n",w);
+        std::cout << "Level " << w << std::endl;
         const auto& Hl = Hs.at(w);
-        int offset = 0;
+        auto offset = 0;
 
         // EXPAND STEP: for each block, expand dimension of subspace with AGSP operators
         Spost.clear();
         for(auto ll : args(Hl)) {
+            t1 = std::chrono::high_resolution_clock::now();
             const auto& hs = hsps.at(w).at(ll);
             MPO  Hc = Hl.at(ll);
             MPVS pre = Spre.at(ll) , ret(hs);
@@ -122,106 +132,130 @@ int main(int argc, char *argv[]) {
             auto xs = pre.parity() == RIGHT ? 1 : length(pre);
 
             // STEP 1: extract filtering operators A from AGSP K
-            t1 = std::chrono::high_resolution_clock::now();
             restrictMPO(K,A,offset+1,D,pre.parity());
-            t2 = std::chrono::high_resolution_clock::now();
-            auto tRes = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
-            fprintf(stdout,"trunc AGSP: %.f s ",tRes.count());
-
+ 
             // STEP 2: expand subspace using the mapping A:pre->ret
-            t1 = std::chrono::high_resolution_clock::now();
-            ret = applyMPO(A,pre,{"Cutoff",eps,"MaxDim",MAXBD});
-            t2 = std::chrono::high_resolution_clock::now();
-            auto tApp = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
-            fprintf(stdout,"apply AGSP: %.f s ",tApp.count());
+            ret = applyMPO(A,pre,{"Cutoff",eps,"Nsweep",25});
 
             // rotate into principal components of subspace, possibly reducing dimension
             // and stabilizing numerics, then store subspace in eigenbasis of block H
-            t1 = std::chrono::high_resolution_clock::now();
             auto [U,Dg] = diagPosSemiDef(inner(ret,ret),{"Cutoff",thr,"Tags","Ext"});
             Dg.apply([](Real r) {return 1.0/sqrt(r);});
             ret.ref(xs) *= U*dag(Dg);
             auto [P,S] = diagPosSemiDef(-inner(ret,Hc,ret),{"Tags","Ext"});
             ret.ref(xs) *= P;
             regauge(ret,xs,{"Cutoff",eps});
-            t2 = std::chrono::high_resolution_clock::now();
-            auto tRot = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
-            fprintf(stdout,"rotate MPS: %.f s\n",tRot.count());
-
             offset += length(pre);
             Spost.push_back(ret);
+            
+            t2 = std::chrono::high_resolution_clock::now();
+            auto tExpand = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
+            std::cout << "expand block " << std::setw(2) << ll << ": " 
+                      << std::fixed << std::setprecision(0) << tExpand.count() << " s" << std::endl;
             }
-        fflush(stdout);
 
         // MERGE/REDUCE STEP: construct tensor subspace, sample to reduce dimension
         Spre.clear();
         for(auto ll : range(Spost.size()/2)) {
+            t1 = std::chrono::high_resolution_clock::now();
             auto spL = Spost.at(2*ll);    // L subspace
             auto spR = Spost.at(2*ll+1);  // R subspace
             auto Htp = Hs.at(w+1).at(ll); // tensor prod Hamiltonian
             auto si = Index(s,"Ext");
 
             // STEP 1: find s lowest eigenpairs of restricted H
-            t1 = std::chrono::high_resolution_clock::now();
             auto tpH = tensorProdContract(spL,spR,Htp);
             tensorProdH resH(tpH);
-            if(resH.size() < s) si = Index(resH.size()-1,"Ext");
-            resH.diag(si,{"Iterative",w == nLevels-2 ? false : doI,"ErrGoal",1e-8,"MaxIter",200*s});
-            t2 = std::chrono::high_resolution_clock::now();
-            auto tDiag = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
-            fprintf(stdout,"(ll=%lu) diag restricted H: %.f s ",2*ll,tDiag.count());
+            if(w == Hs.size()-2)
+                resH.diag(si,{"Iterative",false,"ErrGoal",1e-8,"MaxIter",1000*s});
+            else
+                resH.diag(si,{"Iterative",doI,"ErrGoal",1e-8,"MaxIter",300*s});            
 
             // STEP 2: tensor viable sets on each side and reduce dimension
-            t1 = std::chrono::high_resolution_clock::now();
             MPVS ret(SiteSet(siteInds(Htp)) , ll%2 == 1 ? RIGHT : LEFT);
             tensorProduct(spL,spR,ret,resH.eigenvectors(),ll%2,w!=nLevels-2);
-            t2 = std::chrono::high_resolution_clock::now();
-            auto tTens = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
-            fprintf(stdout,"tensor product: %.f s\n",tTens.count());
-
             Spre.push_back(ret);
+
+            t2 = std::chrono::high_resolution_clock::now();
+            auto tMerge = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
+            std::cout << "merge pair " << std::setw(2) << ll << ": "
+                      << std::fixed << std::setprecision(0) << tMerge.count() << " s" << std::endl;
             }
         }
     auto tF = std::chrono::high_resolution_clock::now();
     auto tRRG = std::chrono::duration_cast<std::chrono::duration<double>>(tF - tI);
-    fprintf(stdout,"rrg elapsed: %.f s\n",tRRG.count());
-    fflush(stdout);
+    std::cout << "rrg elapsed: " << std::fixed << std::setprecision(0) << tRRG.count() << " s" << std::endl;
 
-    // CLEANUP: do rounds of TEBD in order to improve final states
+    // CLEANUP: do some rounds of TEBD
     auto res = Spre[0];
-    auto [ei,eSite] = findExt(res);
-    auto e0 = 0.0 , e1 = 0.0;
-    for(auto i : range(8)) {
-        res = applyMPO(K,res,{"Cutoff",eps,"MaxDim",MAXBD});
+    auto [extIndex,eSite] = findExt(res);
+    auto nTEBD = 20;
+    auto eGS = 0.0;
+
+    for(auto j : range1(N-1)) std::cout << rightLinkIndex(res,j).dim() << " ";
+    std::cout << std::endl;
+ 
+    std::cout << "TEBD steps:" << std::endl; 
+    for(auto i : range(nTEBD)) {
+        res = applyMPO(K,res,{"Cutoff",eps,"MaxDim",MAX_BOND,"Nsweep",10});
         auto [U,Dg] = diagPosSemiDef(inner(res,res),{"Truncate",false,"Tags","Ext"});
         Dg.apply([](Real r) {return 1.0/sqrt(r);});
         res.ref(eSite) *= U*dag(Dg);
         res.ref(eSite).noPrime();
         auto [P,S] = diagPosSemiDef(-inner(res,H,res),{"Tags","Ext"});
         res.ref(eSite) *= P;
-        ei = findIndex(res(eSite),"Ext");
-        e0 = -S.elt(ei(1),prime(ei)(1)) , e1 = -S.elt(ei(2),prime(ei)(2));
-        fprintf(stderr,"gs: %.8f gap: %.8f\n",e0,e1-e0);
+        extIndex = findIndex(res(eSite),"Ext");
+        if(i%10 == 0 || i == nTEBD-1) {
+            eGS = -S.elt(1,1);
+            for(auto j : range(int(extIndex)))
+                if(j == 0)
+                    std::cout << "gs: " << std::fixed << std::setprecision(7) << eGS << " gaps: ";
+                else
+                    std::cout << std::fixed << std::setprecision(5) << -S.elt(j+1,j+1)-eGS << " ";
+            std::cout << std::endl; 
+            }
+        }
+    if(logFile.is_open()) logFile.close();
+
+    using ePair = pair<double,MPS>;
+    vector<ePair> eigenspace;
+    for(auto i : range1(s)) {
+        auto fc = MPS(res);
+        fc.ref(eSite) *= setElt(dag(extIndex)(i));
+        fc.orthogonalize({"Cutoff",epx,"RespectDegenerate",true});
+        fc.normalize();
+        eigenspace.push_back({inner(fc,H,fc),fc});
         }
 
-    // EXIT: write out spectral data, save low-energy states to disk
+    // EXIT: write out spectral data, save ground state in each sector to disk
+    std::ostringstream().swap(ss);
     ss << id << "_sites.dat";
     auto sitesFilename = ss.str();
-    std::ostringstream().swap(ss);
     writeToFile(sitesFilename,hs);
-    std::cout << "Low-energy spectrum:" << std::endl;
-    for(auto i : range1(int(ei))) {
-        auto fc = MPS(res);
-        fc.ref(eSite) *= setElt(dag(ei)(i));
-        fc.orthogonalize({"Cutoff",epx,"RespectDegenerate",true,"MaxDim",MAXBD});
-        fc.normalize();
-        ss.fill('0');
-        std::cout << std::setprecision(10) << inner(fc,H,fc) << std::endl;
-        ss << id << "_state" << std::setw(2) << i-1 << ".dat";
-        auto stateFilename = ss.str();
-        std::ostringstream().swap(ss);
-        writeToFile(stateFilename,fc);
-        }
+    std::ostringstream().swap(ss);
 
-    return 0;  
+    std::ostringstream dbEntry;
+    dbEntry.setf(std::ios::fixed);
+    dbEntry.fill('0');
+    dbEntry << "# N s D t M E0 ..." << std::endl;
+    dbEntry << std::setw(2) << N << " " << std::setw(2) << s << " " << std::setw(2) << D << " " << std::setprecision(3) << t
+            << " " << std::setw(4) << M << " ";
+    for(auto j : range(s)) {
+        dbEntry << std::setprecision(16) << eigenspace.at(j).first << " ";
+        
+        std::ostringstream().swap(ss);
+        ss.fill('0');
+        ss << id << "_e" << std::setw(2) << j << ".dat";
+        auto stateFilename = ss.str();
+        writeToFile(stateFilename,eigenspace.at(j).second);
+        }
+    dbEntry << std::endl;
+
+    // Minimize amount of time spent with db file open (but don't bother with locking)
+    std::ofstream dbFile(id,std::fstream::app);
+    dbFile << dbEntry.str();
+    dbFile.flush();
+    dbFile.close();
+
+    return 0;
     }

@@ -1,23 +1,24 @@
 #ifndef RRG_H
 #define RRG_H
 
-#include "itensor/util/print_macro.h"
-#include "itensor/mps/autompo.h"
-#include "itensor/mps/dmrg.h"
+#include <cmath>
 #include <vector>
 #include <string>
 #include <algorithm>
-#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <iomanip>
 #include <chrono>
 #include <thread>
 #include <map>
+#include "itensor/util/print_macro.h"
+#include "itensor/mps/autompo.h"
+#include "itensor/mps/dmrg.h"
 
 #define LEFT  0
 #define RIGHT 1
-#define MAXBD 1000
+#define MAX_BOND 2000
+#define MAX_TEN_DIM 14000 // ~3GB at double precision
 #define args(x) range(x.size())
 
 using namespace itensor;
@@ -27,27 +28,9 @@ using std::tuple;
 using std::pair;
 
 // error threshold for most dangling-bond operations
-const Real eps = 1E-10;
+const double eps = 1E-10;
 // more sensitive threshold for single MPS or MPO
-const Real epx = 1E-16;
-
-inline Index extIndex(ITensor const& A , string tag = "Ext") {
-    if(hasQNs(A))
-        return Index(QN({-div(A)}),1,tag);
-    else
-        return Index(1,tag);
-    }
-
-inline tuple<Index,int> findExt(MPS const& psi) {
-    auto ret = Index();
-    auto i = 0;
-
-    for(i = 1 ; i <= length(psi) ; ++i)
-        if(ret = findIndex(psi(i),"Ext"))
-            break;
-
-    return {ret,i};
-    }
+const double epx = 1E-13;
 
 // class used for generalized ''dangling-bond'' MPS (matrix product vector space)
 class MPVS : public MPS {
@@ -62,6 +45,8 @@ public:
     MPVS(vector<MPS> const& , int dir = RIGHT);
     int parity() const { return lr; }
     void reverse();
+    void position(int , Args const& = Args::global());
+    MPVS& replaceSiteInds(IndexSet const&);
 };
 
 // class used for generalized ''dangling-bond'' MPO (matrix product operator space)
@@ -70,6 +55,7 @@ public:
     MPOS(MPO const& in) : MPO(in) {}
     MPOS(SiteSet const& sites) : MPO(sites) {}
     void reverse();
+    void position(int , Args const& = Args::global());
 };
 
 // class used as interface for iterative solver
@@ -95,22 +81,16 @@ namespace itensor {
 void plussers(Index const& , Index const& , Index& , ITensor& , ITensor&);
 }
 
-inline FILE* fopen_safe(const char name[]) {
-    FILE *fl;
-    for(int count = 0 ; !(fl = fopen(name,"a")) && count < 100 ; ++count) {
-        fprintf(stderr,"unable to open output file %s, retrying...\n",name);
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        }
-
-    return fl;
-    }
-
 // util.cc
+Index extIndex(ITensor const& , string = "Ext");
+
+template<class MPSLike>
+tuple<Index,int> findExt(MPSLike const&);
+
 void parse_config(std::ifstream& , std::map<string,string>&);
 
 vector<vector<size_t> > block_sizes(string const&);
 
-//template<class Sites>
 void init_H_blocks(AutoMPO const& , vector<MPO>& , vector<SiteSet> const&);
 
 Index siteIndex(MPVS const&, int);
@@ -119,37 +99,29 @@ IndexSet siteInds(MPVS const&);
 
 IndexSet siteInds(MPO const&);
 
-MPO sysOp(SiteSet const&, const char*, const Real = 1.);
-
 ITensor inner(MPVS const& , MPO const& , MPVS const&);
 
 ITensor inner(MPVS const& , MPVS const&);
 
 template<class MPSLike>
 void regauge(MPSLike& , int , Args const& = Args::global());
-
+/*
 Real cutEE(MPS const& , int);
 
 Real mutualInfoTwoSite(MPS const& , int , int);
-/*
-template<class Tensor>
-Real measOp(const MPSt<Tensor>& , const ITensor& , int , const ITensor& , int);
-
-template<class Tensor>
-Real measOp(const MPSt<Tensor>& , const ITensor& , int);
 */
-//vector<double> dmrgMPO(MPO const& , vector<MPS>& , int , Args const& = Args::global()); 
+void dmrgMPO(MPO const& , vector<pair<double,MPS> >& , int , Args const& = Args::global()); 
 
 void Trotter(MPO& , double , size_t , AutoMPO&); 
 
-double restrictMPO(MPO const& , MPOS& , int , int , int);
+void restrictMPO(MPO const& , MPOS& , int , int , int);
 
 pair<ITensor,ITensor> tensorProdContract(MPVS const&, MPVS const&, MPO const&);
 
 void tensorProduct(MPVS const& , MPVS const& , MPVS& , ITensor const& , int, bool = true);
 
-MPVS applyMPO(MPOS const&, MPVS const&, Args = Args::global());
+MPVS applyMPO(MPOS const&, MPVS const&, Args const& = Args::global());
 
-MPVS applyMPO(MPO const&, MPVS const&, Args = Args::global());
+MPVS applyMPO(MPO const&, MPVS const&, Args const& = Args::global());
 
 #endif
