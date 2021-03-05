@@ -1,0 +1,6 @@
+Makefile
+rrg_*
+*.dat
+*.log
+.*
+!.gitignore

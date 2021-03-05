@@ -29,13 +29,13 @@ vector<ITensor> diagTen(tensorProdH const& H , Index si , IndexSet iset , Args c
 
 void tensorProdH::diag(Index si , Args const& args) {
     auto N = size();
-    auto s = int(si);
+    auto s = si.dim();
     auto doI = args.getBool("Iterative",true);
-    auto nBlocks = hasQNs(si) ? static_cast<size_t>(nblock(si)) : 1lu;
+    auto blNum = nBlocks(si);
     
     std::cout << "dim H = " << N << "..." << std::endl;
-    if(doI || N >= MAX_TEN_DIM*nBlocks) { // iterative diag
-        if(N >= MAX_TEN_DIM*nBlocks && !doI)
+    if(doI || N >= sqrt(blNum)*MAX_TEN_DIM) { // iterative diag
+        if(N >= sqrt(blNum)*MAX_TEN_DIM && !doI)
             std::cout << "H too large, iterative diag" << std::endl;
         
         auto iset = IndexSet(dag(ind.first),dag(ind.second)); 
