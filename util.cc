@@ -337,9 +337,9 @@ void dmrgMPO(MPO const& H , vector<std::pair<double,MPS> >& eigen , int num_sw, 
         swp.niter() = 5;
         swp.noise() = 0.0;
 
-        auto [en,res] = dmrg(H,exclude,psi,swp,{"Silent",true,"Weight",penalty});
+        auto [en,res] = dmrg(H,exclude,psi,swp,{"Quiet",true,"Weight",penalty});
 
-        if(do_exclude) exclude.push_back(psi);
+        if(do_exclude) exclude.push_back(res);
         evPair = {std::move(en),std::move(res)};
         }
 
