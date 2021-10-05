@@ -7,4 +7,4 @@ Then copy the Makefile.example in this repository to Makefile, changing the ITen
 To run RRG for one of the example models, simply use `make` to compile the example.
 Then run the compiled executable, providing the example configuration file provided in the appropriate directory as a command-line argument.
 
-Currently the example models which are implemented are a particular nonintegrable Ising model (where the driver code solves for the ground states and bottom of the excitation band), which you can compile with `make rrg_ising`; and the disordered XY model (where the driver code focuses on resolving the gap), which you can compile with `make rrg_random_xy`.
+Currently the example models which are implemented are a particular nonintegrable Ising model (where the driver code solves for the ground states and bottom of the excitation band), which you can compile with `make rrg_ising`; and the disordered XY model (where the driver code resolves the global symmetry and focuses on computing the gap), which you can compile with `make rrg_random_xy`.
