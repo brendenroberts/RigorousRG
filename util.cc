@@ -309,7 +309,7 @@ MPO multiplyMPO(MPO const& A , MPO const& B , Args args) {
     return res;
     }
 
-MPO Trotter(double t , size_t M , AutoMPO const& ampo) {
+MPO Trotter(double t , size_t M , AutoMPO const& ampo , double eps) {
     auto evOp = toExpH(ampo,1.0/(t*M));
     evOp.orthogonalize();
 
@@ -415,6 +415,7 @@ void tensorProduct(MPVS const& psiL,
                    MPVS const& psiR,
                    MPVS& ret,
                    ITensor const& W,
+                   double eps,
                    bool move) {
     const auto N = length(ret) , nL = length(psiL) , nR = length(psiR);
     const auto ei = uniqueIndex(W,{psiL(nL),psiR(1)},"Ext");

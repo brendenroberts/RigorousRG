@@ -16,8 +16,6 @@ using namespace itensor;
 using std::vector;
 using std::string;
 
-// error threshold for most dangling-bond operations
-const double eps = 1E-9;
 // more sensitive threshold for single MPS or MPO
 const double epx = 1E-14;
 
@@ -89,13 +87,13 @@ ITensor inner(MPVS const& , MPO const& , MPVS const&);
 
 void dmrgMPO(MPO const& , vector<std::pair<double,MPS> >& , int , Args const& = Args::global()); 
 
-MPO Trotter(double , size_t , AutoMPO const&); 
+MPO Trotter(double , size_t , AutoMPO const& , double); 
 
 void sliceMPO(MPO const& , MPOS& , int , size_t = 0lu);
 
 std::pair<ITensor,ITensor> tensorProdContract(MPVS const&, MPVS const&, MPO const&);
 
-void tensorProduct(MPVS const& , MPVS const& , MPVS& , ITensor const& , bool = true);
+void tensorProduct(MPVS const& , MPVS const& , MPVS& , ITensor const& , double , bool = true);
 
 MPVS applyMPO(MPO const&, MPVS const&, Args = Args::global());
 

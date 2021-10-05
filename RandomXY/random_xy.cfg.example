@@ -5,6 +5,7 @@ t = 0.05
 M = 500
 s = 6
 D = 8
+eps = 1e-9
 Gamma = 2.0
 id = random_xy_N48
 seed = 2403554985

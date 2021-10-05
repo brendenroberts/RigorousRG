@@ -19,11 +19,12 @@ int main(int argc, char *argv[]) {
     configFile.close();
 
     // RRG & AGSP parameters
-    const size_t N = stoul(configParams.at("N")); // system size
-    const double t = stod(configParams.at("t"));  // AGSP temperature
-    const size_t M = stoul(configParams.at("M")); // num Trotter steps
-    const size_t s = stoul(configParams.at("s")); // formal s param
-    const size_t D = stoul(configParams.at("D")); // formal D param
+    const size_t N   = stoul(configParams.at("N")); // system size
+    const double t   = stod(configParams.at("t"));  // AGSP temperature
+    const size_t M   = stoul(configParams.at("M")); // num Trotter steps
+    const size_t s   = stoul(configParams.at("s")); // formal s param
+    const size_t D   = stoul(configParams.at("D")); // formal D param
+    const double eps = stod(configParams.at("eps")); // MPVS error tolerance
     
     // Hamitonian parameters
     const double J = stod(configParams.at("J")); // Ising interaction strength
@@ -32,7 +33,7 @@ int main(int argc, char *argv[]) {
 
     // computational settings
     const bool   doI = true; // diag restricted Hamiltonian iteratively?
-    const auto   thr = epx;  // PCA threshold for sampled states
+    const auto   thr = eps;  // PCA threshold for sampled states
 
     // IO stream stuff for setting up output filenames
     auto configId = configParams.find("id");
@@ -101,7 +102,7 @@ int main(int argc, char *argv[]) {
         }
 
     // generate AGSP thermal operator exp(-H/t) using Trotter
-    auto K = Trotter(t,M,autoH);
+    auto K = Trotter(t,M,autoH,eps);
     std::cout << "maximum AGSP bond dim = " << maxLinkDim(K) << std::endl;
 
     // INITIALIZATION: reduce dimension by sampling from initial basis
@@ -185,7 +186,7 @@ int main(int argc, char *argv[]) {
 
             // STEP 2: tensor viable sets on each side and reduce dimension
             MPVS ret(SiteSet(siteInds(Hcur)));
-            tensorProduct(spL,spR,ret,resH.eigenvectors(),!last);
+            tensorProduct(spL,spR,ret,resH.eigenvectors(),eps,!last);
             if(parity == LEFT) ret.reverse();
             Spre.push_back(std::move(ret));
 
@@ -203,7 +204,7 @@ int main(int argc, char *argv[]) {
     auto res = Spre[0];
     auto [extIndex,eSite] = findExt(res);
     auto nTEBD = 5lu , tSteps = 25lu;
-    auto eH = toExpH(autoH,1.0/(N/2*tSteps),{"Cutoff",0.0});
+    auto eH = toExpH(autoH,1.0/(N*tSteps),{"Cutoff",epx});
 
     for(auto j : range1(N-1)) std::cout << rightLinkIndex(res,j).dim() << " ";
     std::cout << std::endl;
@@ -216,15 +217,15 @@ int main(int argc, char *argv[]) {
     res.ref(eSite) *= P;
     extIndex = findIndex(res(eSite),"Ext");
 
-    std::cout << "gs: " << std::fixed << std::setprecision(7) << -S.elt(1,1) << " gaps: ";
+    std::cout << "gs: " << std::fixed << std::setprecision(5) << -S.elt(1,1) << " gaps: ";
     for(auto j : range1(extIndex.dim()-1))
-        std::cout << std::fixed << std::setprecision(5) << -S.elt(j+1,j+1)+S.elt(1,1) << " ";
+        std::cout << std::fixed << std::setprecision(4) << -S.elt(j+1,j+1)+S.elt(1,1) << " ";
     std::cout << std::endl;
 
     std::cout << "TEBD steps:" << std::endl;
     for(auto i : range(nTEBD)) {
         for(auto mval : range(tSteps)) {
-            res = applyMPO(eH,res,{"Cutoff",eps,"MaxDim",MAX_BOND,"DoApprox",false});
+            res = applyMPO(eH,res,{"Cutoff",eps*1e-1,"MaxDim",MAX_BOND,"DoApprox",false});
             res.noPrime();
             }
         auto [U,Dg] = diagPosSemiDef(inner(res,res),{"Truncate",false,"Tags","Ext"});
@@ -235,7 +236,7 @@ int main(int argc, char *argv[]) {
         res.ref(eSite) *= P;
         extIndex = findIndex(res(eSite),"Ext");
 
-        std::cout << "gs: " << std::fixed << std::setprecision(7) << -S.elt(1,1) << " gaps: ";
+        std::cout << "gs: " << std::fixed << std::setprecision(5) << -S.elt(1,1) << " gaps: ";
         for(auto j : range1(extIndex.dim()-1))
             std::cout << std::fixed << std::setprecision(4) << -S.elt(j+1,j+1)+S.elt(1,1) << " ";
         std::cout << std::endl;

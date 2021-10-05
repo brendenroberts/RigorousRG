@@ -19,11 +19,12 @@ int main(int argc, char *argv[]) {
     configFile.close();
 
     // RRG & AGSP parameters
-    const size_t N = stoul(configParams.at("N")); // system size
-    const double t = stod(configParams.at("t"));  // AGSP temperature
-    const size_t M = stoul(configParams.at("M")); // num Trotter steps
-    const size_t s = stoul(configParams.at("s")); // formal s param
-    const size_t D = stoul(configParams.at("D")); // formal D param
+    const size_t N   = stoul(configParams.at("N")); // system size
+    const double t   = stod(configParams.at("t"));  // AGSP temperature
+    const size_t M   = stoul(configParams.at("M")); // num Trotter steps
+    const size_t s   = stoul(configParams.at("s")); // formal s param
+    const size_t D   = stoul(configParams.at("D")); // formal D param
+    const double eps = stod(configParams.at("eps")); // MPVS error tolerance
     
     // computational settings
     const bool doI = true; // diag restricted Hamiltonian iteratively?
@@ -109,7 +110,7 @@ int main(int argc, char *argv[]) {
         }
 
     // generate AGSP thermal operator exp(-H/t) using Trotter
-    auto K = Trotter(t,M,autoH);
+    auto K = Trotter(t,M,autoH,eps);
     std::cout << "maximum AGSP bond dim = " << maxLinkDim(K) << std::endl;
     
     // INITIALIZATION: reduce dimension by sampling from initial basis
@@ -193,7 +194,7 @@ int main(int argc, char *argv[]) {
 
             // STEP 2: tensor viable sets on each side and reduce dimension
             MPVS ret(SiteSet(siteInds(Hcur)));
-            tensorProduct(spL,spR,ret,resH.eigenvectors(),!last);
+            tensorProduct(spL,spR,ret,resH.eigenvectors(),eps,!last);
             if(parity == LEFT) ret.reverse();
             Spre.push_back(std::move(ret));
 
@@ -212,7 +213,7 @@ int main(int argc, char *argv[]) {
     auto [extIndex,eSite] = findExt(res);
     auto nTEBD = 10lu , tSteps = M/2 , nDMRG = 2*N; 
     auto eGS = 0.0 , minGap = 0.0 , convGS = 1.0;
-    auto eH = toExpH(autoH,1.0/(N/2*tSteps),{"Cutoff",0.0});
+    auto eH = toExpH(autoH,1.0/(N/2*tSteps),{"Cutoff",epx});
 
     for(auto j : range1(N-1)) std::cout << rightLinkIndex(res,j).dim() << " ";
     std::cout << std::endl;

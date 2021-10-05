@@ -1,10 +1,11 @@
 # this is a config file for RRG random XYZ model code
 N = 128
 n = 8 8 8 8 8 8 8 8 8 8 8 8 8 8 8 8
-t = 0.5
+t = 0.6
 M = 500
 s = 32
 D = 4
+eps = 1e-8
 J = 1.0
 g = -1.05
 h = 0.5
