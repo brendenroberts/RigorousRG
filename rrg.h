@@ -8,7 +8,7 @@
 
 #define LEFT false
 #define RIGHT true
-#define MAX_BOND 2500lu
+#define MAX_BOND 3000lu
 #define MAX_TEN_DIM 7500lu
 #define args(x) range(x.size())
 
@@ -17,7 +17,7 @@ using std::vector;
 using std::string;
 
 // more sensitive threshold for single MPS or MPO
-const double epx = 1E-14;
+const double epx = 1E-12;
 
 // class used for generalized "dangling-bond" MPS (matrix product vector space):
 // typically the dangling bond is located at site 1 (indicated by RIGHT parity),
@@ -62,7 +62,7 @@ public:
     tensorProdH(LRTen& HH) : ten(HH),ind({findIndex(HH.first, "Ext,0"),
                                           findIndex(HH.second,"Ext,0")}) { }
     void product(ITensor const& , ITensor&) const;
-    void diag(Index , Args const& = Args::global());
+    void diag(vector<int> const& , Args const& = Args::global());
     size_t size() const { return ind.first.dim()*ind.second.dim(); }
     ITensor eigenvectors() const { return evc; }
 };
@@ -85,6 +85,8 @@ IndexSet siteInds(MPO const&);
 
 ITensor inner(MPVS const& , MPO const& , MPVS const&);
 
+ITensor inner(MPVS const& , MPO const& , MPVS const& , size_t);
+
 void dmrgMPO(MPO const& , vector<std::pair<double,MPS> >& , int , Args const& = Args::global()); 
 
 MPO Trotter(double , size_t , AutoMPO const& , double); 
@@ -93,15 +95,19 @@ void sliceMPO(MPO const& , MPOS& , int , size_t = 0lu);
 
 std::pair<ITensor,ITensor> tensorProdContract(MPVS const&, MPVS const&, MPO const&);
 
-void tensorProduct(MPVS const& , MPVS const& , MPVS& , ITensor const& , double , bool = true);
+void tensorProduct(MPVS const& , MPVS const& , MPVS& , ITensor const& , Args const& = Args::global());
 
 MPVS applyMPO(MPO const&, MPVS const&, Args = Args::global());
 
 // some one-liners
+inline int divRoundClosest(const int n, const int d) { return ((n < 0) ^ (d < 0)) ? ((n - d/2)/d) : ((n + d/2)/d); }
+
 inline size_t nBlocks(Index const& index) { return std::max(static_cast<size_t>(nblock(index)),1lu); }
 
 inline Index siteIndex(MPVS const& psi, int j) { return findIndex(psi(j),"Site"); }
 
 inline ITensor inner(MPVS const& phi, MPVS const& psi) { return inner(phi,MPO(siteInds(phi)),psi); }
+
+inline ITensor inner(MPVS const& phi, MPVS const& psi , size_t eSite) { return inner(phi,MPO(siteInds(phi)),psi,eSite); }
 
 #endif

@@ -229,6 +229,28 @@ ITensor inner(MPVS const& phi, MPO const& H, MPVS const& psi) {
     return L;
     }
 
+ITensor inner(MPVS const& phi, MPO const& H, MPVS const& psi , size_t eSite) {
+    size_t N = length(H);
+    if(static_cast<size_t>(length(phi)) != N || static_cast<size_t>(length(psi)) != N) Error("inner mismatched N");
+    ITensor L,R;
+
+    for(size_t i = 1; i <= eSite; ++i) {
+        L = i == 1 ? phi(i) : L*phi(i);
+        L *= H(i);
+        if(i < eSite) L *= dag(prime(psi(i)));
+        }
+
+    for(size_t i = N ; i >= eSite ; --i) {
+        if(i > eSite) {
+            R = i == N ? phi(i) : R*phi(i);
+            R *= H(i);
+            }
+        R *= dag(prime(psi(i)));
+        }
+    
+    return L*R;
+    }
+
 MPO multiplyMPO(MPO const& A , MPO const& B , Args args) {
     auto cutoff = args.getReal("Cutoff",epx);
     auto dargs = Args{"Cutoff",cutoff};
@@ -316,7 +338,7 @@ MPO Trotter(double t , size_t M , AutoMPO const& ampo , double eps) {
     auto eH = evOp;
     evOp.prime();
     for(auto i : range(M-1)) {
-        eH = multiplyMPO(eH,evOp,{"Cutoff",eps,"RespectDegenerate",true});
+        eH = multiplyMPO(eH,evOp,{"Cutoff",eps/length(eH),"RespectDegenerate",true});
         eH.ref(1) *= exp(length(eH))/norm(eH(1));
         }
 
@@ -325,6 +347,7 @@ MPO Trotter(double t , size_t M , AutoMPO const& ampo , double eps) {
 
 void dmrgMPO(MPO const& H , vector<std::pair<double,MPS> >& eigen , int num_sw, Args const& args) {
     auto do_exclude = args.getBool("Exclude",true);
+    auto maxDim = args.getInt("MaxDim",MAX_BOND);
     auto penalty = args.getReal("Penalty",1.0);
     auto err = args.getReal("Cutoff",epx);
     vector<MPS> exclude;
@@ -332,9 +355,9 @@ void dmrgMPO(MPO const& H , vector<std::pair<double,MPS> >& eigen , int num_sw, 
     for(auto& evPair : eigen) {
         auto psi = evPair.second;
         auto swp = Sweeps(num_sw);
-        swp.maxdim() = MAX_BOND;
+        swp.maxdim() = maxDim;
         swp.cutoff() = err;
-        swp.niter() = 5;
+        swp.niter() = 3;
         swp.noise() = 0.0;
 
         auto [en,res] = dmrg(H,exclude,psi,swp,{"Silent",true,"Weight",penalty});
@@ -415,10 +438,12 @@ void tensorProduct(MPVS const& psiL,
                    MPVS const& psiR,
                    MPVS& ret,
                    ITensor const& W,
-                   double eps,
-                   bool move) {
+                   Args const& args) {
     const auto N = length(ret) , nL = length(psiL) , nR = length(psiR);
     const auto ei = uniqueIndex(W,{psiL(nL),psiR(1)},"Ext");
+    const auto cutoff = args.getReal("Cutoff",epx);
+    const auto maxBd = args.getInt("MaxDim",MAX_BOND);
+    const auto move = args.getBool("Move",true);
     ITensor T,U,S,V;
 
     for(auto i : range1(nL))
@@ -432,14 +457,14 @@ void tensorProduct(MPVS const& psiL,
         auto ai = leftLinkIndex(ret,nL-i);
         T = i == 0 ? ret(nL-i)*W*ret(nL-i+1) : ret(nL-i)*ret(nL-i+1);
         U = ITensor(siteIndex(ret,nL-i),ai,ei);
-        //ret.svdBond(nL-i,T,Fromright,{"Cutoff",eps,"MaxDim",MAX_BOND,"RespectDegenerate",true,"UseSVD",true});
-        svd(T,U,S,V,{"Cutoff",eps,"MaxDim",MAX_BOND,"RespectDegenerate",true});
+        //ret.svdBond(nL-i,T,Fromright,{"Cutoff",cutoff,"MaxDim",maxBd,"RespectDegenerate",true,"UseSVD",true});
+        svd(T,U,S,V,{"Cutoff",cutoff,"MaxDim",maxBd,"RespectDegenerate",true});
         ret.set(nL-i,U*S);
         ret.set(nL-i+1,V);
         if(!move) return;
         }
 
-    ret.orthogonalize({"Cutoff",eps,"MaxDim",MAX_BOND,"RespectDegenerate",true});
+    ret.orthogonalize({"Cutoff",cutoff,"MaxDim",maxBd,"RespectDegenerate",true});
     return; 
     }
 
