@@ -25,15 +25,12 @@ int main(int argc, char *argv[]) {
     const size_t s   = stoul(configParams.at("s")); // formal s param
     const size_t D   = stoul(configParams.at("D")); // formal D param
     const double eps = stod(configParams.at("eps")); // MPVS error tolerance
+    const bool doLanczos = true; // diag restricted Hamiltonian iteratively?
     
     // Hamitonian parameters
     const double J = stod(configParams.at("J")); // Ising interaction strength
     const double g = stod(configParams.at("g")); // transverse field strength
     const double h = stod(configParams.at("h")); // longitudinal field strength
-
-    // computational settings
-    const bool   doI = true; // diag restricted Hamiltonian iteratively?
-    const auto   thr = eps;  // PCA threshold for sampled states
 
     // IO stream stuff for setting up output filenames
     auto configId = configParams.find("id");
@@ -123,85 +120,12 @@ int main(int argc, char *argv[]) {
     std::cout << "initialization: " << std::fixed <<std::setprecision(0) << tInit.count() << " s" << std::endl;
  
     // ITERATION: proceed through RRG hierarchy, increasing the scale m
-    vector<MPVS> Spost;
-    auto nLevels = blockNs.size();
-    for(auto w  = 0u ; w < nLevels-1 ; ++w) {
-        std::cout << "Level " << w << std::endl;
-        const auto& Hl = Hs.at(w);
-        auto offset = 0u;
-
-        // EXPAND STEP: for each block, expand dimension of subspace with AGSP operators
-        Spost.clear();
-        for(auto ll : args(Hl)) {
-            t1 = std::chrono::high_resolution_clock::now();
-            const auto& hs = hsps.at(w).at(ll);
-            auto Hc = MPOS(Hl.at(ll));
-            auto pre = Spre.at(ll) , ret = MPVS(hs);
-            auto parity = pre.parity();
-            MPOS A(hs);
-
-            // STEP 1: extract filtering operators A from AGSP K
-            sliceMPO(K,A,offset+1,D);
-            if(parity == LEFT) { A.reverse(); pre.reverse(); Hc.reverse(); }
-            A.orthogonalize({"Cutoff",epx,"MaxDim",MAX_BOND,"RespectDegenerate",true});
-
-            // STEP 2: expand subspace using the mapping A:pre->ret
-            ret = applyMPO(A,pre,{"Cutoff",eps,"MaxDim",MAX_BOND,"Nsweep",16,"UseSVD",true});
-            ret.noPrime();
-
-            // rotate into principal components of subspace, possibly reducing dimension
-            // and stabilizing numerics, then store subspace in eigenbasis of block H
-            auto [U,Dg] = diagPosSemiDef(inner(ret,ret),{"Cutoff",thr,"Tags","Ext"});
-            Dg.apply([](Real r) {return 1.0/sqrt(r);});
-            ret.ref(1) *= U*dag(Dg);
-            auto [P,S] = diagPosSemiDef(-inner(ret,Hc,ret),{"Tags","Ext"});
-            ret.ref(1) *= P;
-            ret.orthogonalize({"Cutoff",eps,"MaxDim",MAX_BOND,"RespectDegenerate",true});
-
-            if(parity == LEFT) { ret.reverse(); }
-            Spost.push_back(std::move(ret));
-            offset += length(pre);
-
-            t2 = std::chrono::high_resolution_clock::now();
-            auto tExpand = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
-            std::cout << "expand block " << std::setw(2) << ll << ": "
-                      << std::fixed << std::setprecision(0) << tExpand.count() << " s" << std::endl;
-            }
-
-        // MERGE/REDUCE STEP: construct tensor subspace, sample to reduce dimension
-        Spre.clear();
-        for(auto ll : range(Spost.size()/2)) {
-            t1 = std::chrono::high_resolution_clock::now();
-            auto parity = ll%2 ? RIGHT : LEFT , last = Spost.size() == 2;
-            auto spL = Spost.at(parity == RIGHT ? 2*ll : 2*ll+1); // L subspace
-            auto spR = Spost.at(parity == RIGHT ? 2*ll+1 : 2*ll); // R subspace
-            auto Hcur = MPOS(Hs.at(w+1).at(ll)); // tensor prod Hamiltonian
-            auto si = Index(s,"Ext");
-            if(parity == LEFT) { spL.reverse(); spR.reverse(); Hcur.reverse(); }
-
-            // STEP 1: find s lowest eigenpairs of restricted H
-            auto tpH = tensorProdContract(spL,spR,Hcur);
-            tensorProdH resH(tpH);
-            resH.diag(si,{"Iterative",doI,"ErrGoal",eps,"MaxIter",500*s,"DebugLevel",0});
-
-            // STEP 2: tensor viable sets on each side and reduce dimension
-            MPVS ret(SiteSet(siteInds(Hcur)));
-            tensorProduct(spL,spR,ret,resH.eigenvectors(),eps,!last);
-            if(parity == LEFT) ret.reverse();
-            Spre.push_back(std::move(ret));
-
-            t2 = std::chrono::high_resolution_clock::now();
-            auto tMerge = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
-            std::cout << "merge pair " << std::setw(2) << ll << ": "
-                      << std::fixed << std::setprecision(0) << tMerge.count() << " s" << std::endl;
-            }
-        }
+    auto res = rrg(Spre,K,Hs,{"Cutoff",eps,"ExtDim",s,"AGSPDim",D,"Iterative",doLanczos});
     auto tF = std::chrono::high_resolution_clock::now();
     auto tRRG = std::chrono::duration_cast<std::chrono::duration<double>>(tF - tI);
     std::cout << "rrg elapsed: " << std::fixed << std::setprecision(0) << tRRG.count() << " s" << std::endl;
 
     // CLEANUP: do some rounds of TEBD
-    auto res = Spre[0];
     auto [extIndex,eSite] = findExt(res);
     auto nTEBD = 5lu , tSteps = 25lu;
     auto eH = toExpH(autoH,1.0/(N*tSteps),{"Cutoff",epx});

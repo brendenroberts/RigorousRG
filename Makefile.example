@@ -7,7 +7,7 @@ ITENSOR_DIR=/path/to/itensor
 #################################################################
 
 HEADERS=rrg.h
-CCFILES=util.cc tensorProdH.cc
+CCFILES=rrg.cc util.cc tensorProdH.cc
 C2FLAGS= -I. -Wno-unused-function
 
 include $(ITENSOR_DIR)/this_dir.mk

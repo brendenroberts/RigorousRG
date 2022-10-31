@@ -67,6 +67,11 @@ public:
     ITensor eigenvectors() const { return evc; }
 };
 
+// main loop implemented in rrg.cc 
+MPVS rrg(vector<MPVS>& , MPO const& , vector<vector<MPO> > const& , vector<int> const& , Args const& = Args::global()); 
+
+MPVS rrg(vector<MPVS>& , MPO const& , vector<vector<MPO> > const& , Args const& = Args::global()); 
+
 // subroutines implemented in util.cc
 Index extIndex(ITensor const& , string = "Ext");
 
