@@ -82,8 +82,8 @@ vector<vector<size_t> > parseBlockSizes(string spec) {
     return ns;
     }
 
-void blockHs(vector<MPO>& Hs , AutoMPO const& H , vector<SiteSet> const& HH) {
-    if(HH.size() == 1lu) Hs.push_back(toMPO(H,{"Exact",true}));
+void blockHs(vector<MPO>& Hs , AutoMPO const& H , vector<SiteSet> const& HH , Args const& args) {
+    if(HH.size() == 1lu) Hs.push_back(toMPO(H,args));
     const auto N = length(H.sites());
 
     auto offset = 0; 
@@ -103,7 +103,7 @@ void blockHs(vector<MPO>& Hs , AutoMPO const& H , vector<SiteSet> const& HH) {
                 }
             }
         offset += n;
-        Hs.push_back(toMPO(Hcur,{"Exact",true}));
+        Hs.push_back(toMPO(Hcur,args));
         }
 
     return;

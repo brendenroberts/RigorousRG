@@ -17,7 +17,7 @@ using std::vector;
 using std::string;
 
 // more sensitive threshold for single MPS or MPO
-const double epx = 1E-12;
+const double epx = 1E-14;
 
 // class used for generalized "dangling-bond" MPS (matrix product vector space):
 // typically the dangling bond is located at site 1 (indicated by RIGHT parity),
@@ -59,10 +59,11 @@ protected:
     ITensor evc;
 
 public:
-    tensorProdH(LRTen& HH) : ten(HH),ind({findIndex(HH.first, "Ext,0"),
+    tensorProdH(LRTen HH) : ten(HH),ind({findIndex(HH.first, "Ext,0"),
                                           findIndex(HH.second,"Ext,0")}) { }
     void product(ITensor const& , ITensor&) const;
     void diag(vector<int> const& , Args const& = Args::global());
+    void diag(Args const& = Args::global());
     size_t size() const { return ind.first.dim()*ind.second.dim(); }
     ITensor eigenvectors() const { return evc; }
 };
@@ -82,7 +83,7 @@ void parseConfig(std::ifstream& , std::map<string,string>&);
 
 vector<vector<size_t> > parseBlockSizes(string);
 
-void blockHs(vector<MPO>& , AutoMPO const& , vector<SiteSet> const&);
+void blockHs(vector<MPO>& , AutoMPO const& , vector<SiteSet> const& , Args const& = Args::global());
 
 IndexSet siteInds(MPVS const&);
 

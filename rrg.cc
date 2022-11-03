@@ -9,7 +9,8 @@ MPVS rrg(vector<MPVS>& Spre , MPO const& K , vector<vector<MPO> > const& Hs , ve
     const auto N = length(Hs.back().front());
     const auto cutoff = args.getReal("Cutoff",epx);
     const auto s = args.getInt("ExtDim",1);
-    const auto D = args.getInt("AGSPDim",1);
+    const auto D = args.getInt("OpDim",1);
+    const auto sLast = args.getInt("ExtDimLast",s);
     const auto maxBd = args.getInt("MaxDim",MAX_BOND);
     const auto truncateQNs = args.getBool("TruncateQNs",false);
     const auto qnSpread = args.getInt("QNSpread",1);
@@ -85,7 +86,7 @@ MPVS rrg(vector<MPVS>& Spre , MPO const& K , vector<vector<MPO> > const& Hs , ve
             // STEP 1: find s lowest eigenpairs of restricted H
             auto tpH = tensorProdContract(spL,spR,Hcur);
             tensorProdH resH(tpH);
-            resH.diag(localQNs,{"ExtDim",s,"QNSpread",last?0:qnSpread,"Iterative",doLanczos,
+            resH.diag(localQNs,{"ExtDim",last?sLast:s,"QNSpread",last?0:qnSpread,"Iterative",doLanczos,
                                 "ErrGoal",cutoff*(last?1:1e2),"MaxIter",500*s,"DebugLevel",0});
 
             // STEP 2: tensor viable sets on each side and reduce dimension
@@ -107,9 +108,7 @@ MPVS rrg(vector<MPVS>& Spre , MPO const& K , vector<vector<MPO> > const& Hs , ve
     }
 
 MPVS rrg(vector<MPVS>& Spre , MPO const& K , vector<vector<MPO> > const& Hs , Args const& args) {
-    auto args2 = args;
-    args2.add("TruncateQNS",false);
+    auto args2 = args; args2.add("TruncateQNs",false);
     vector<int> dummyQNs;
-
     return rrg(Spre , K , Hs , dummyQNs , args2);
     }

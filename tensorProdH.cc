@@ -11,10 +11,13 @@ vector<ITensor> diagTen(tensorProdH const& H , Index si , IndexSet iset , Args c
     if(hasQNs(si)) {
         auto offset = 0;   
         for(auto q : range1(nblock(si))) {
+            auto args2 = args;
+            args2.add("MaxIter",500*blocksize(si,q));
+            
             vector<ITensor> cur;
             for(auto i : range(blocksize(si,q)))
                 cur.push_back(randomITensor(qn(si,q),iset));
-            davidson(H,cur,args);
+            davidson(H,cur,args2);
             std::swap_ranges(cur.begin(),cur.end(),ret.begin()+offset);
             offset += blocksize(si,q);
             }
@@ -32,8 +35,12 @@ void tensorProdH::diag(vector<int> const& localQNs , Args const& args) {
     const auto s = args.getInt("ExtDim",1);
     const auto qnSpread = args.getInt("QNSpread",1);
     const auto doI = args.getBool("Iterative",true);
-    auto ci = get<1>(combiner({ind.first,ind.second},{"Tags","Ext"})) , si = Index();
+    const auto verbose = args.getBool("Verbose",true);    
 
+    std::streambuf* old_cout = std::cout.rdbuf();
+    if(!verbose) std::cout.rdbuf(NULL);
+
+    auto ci = get<1>(combiner({ind.first,ind.second},{"Tags","Ext"})) , si = Index();
     if(hasQNs(ci)) {
         vector<std::pair<QN,long> > siQNs;
         for(auto q : range1(nBlocks(ci))) {
@@ -48,9 +55,8 @@ void tensorProdH::diag(vector<int> const& localQNs , Args const& args) {
         si = Index(std::move(siQNs),"Ext");    
     } else
         si = Index(s,"Ext");
-    
-    const auto blNum = nBlocks(si);
 
+    const auto blNum = nBlocks(si);
     std::cout << "dim H = " << N << "..." << std::endl;
     if(doI || N >= sqrt(blNum)*MAX_TEN_DIM) { // iterative diag
         if(N >= sqrt(blNum)*MAX_TEN_DIM && !doI)
@@ -58,15 +64,12 @@ void tensorProdH::diag(vector<int> const& localQNs , Args const& args) {
         
         auto iset = IndexSet(dag(ind.first),dag(ind.second)); 
 	    auto ret = diagTen(*this,si,iset,args);
-        for(int i : range(dim(si))) {
-            auto A = ret.at(i); // verbose way to do this, but there's a bug in setElt
-            A *= setElt(dag(si(i+1)));
-            evc += A;
-            }
+        for(int i : range(dim(si)))
+            evc += ret.at(i)*setElt(dag(si)=i+1);
         evc.dag();
     } else { // dense matrix diag routine, limited to low dimensional local spaces
         auto bigTensor = -(ten.first*ten.second);
-        evc = std::get<0>(diagPosSemiDef(bigTensor,{"Truncate",false,"Tags","Ext"}));
+        evc = std::get<0>(diagHermitian(bigTensor,{"Tags","Ext"}));
         auto eI = uniqueIndex(evc,bigTensor);
         auto A = ITensor(si,dag(eI));
         if(hasQNs(si)) {
@@ -88,5 +91,13 @@ void tensorProdH::diag(vector<int> const& localQNs , Args const& args) {
         evc *= A;
         }
 
+    if(!verbose) std::cout.rdbuf(old_cout);
+
+    return;
+    }
+
+void tensorProdH::diag(Args const& args) {
+    vector<int> dummyQNs;
+    this->diag(dummyQNs,args);
     return;
     }

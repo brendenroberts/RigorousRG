@@ -98,7 +98,7 @@ int main(int argc, char *argv[]) {
         Spre.push_back(MPVS(V,a%2==1?RIGHT:LEFT));
         }
 
-    // generate AGSP thermal operator exp(-H/t) using Trotter
+    // generate AGSP thermal operator exp(-H/t)
     auto K = Trotter(t,M,autoH,eps);
     std::cout << "maximum AGSP bond dim = " << maxLinkDim(K) << std::endl;
 
@@ -119,8 +119,8 @@ int main(int argc, char *argv[]) {
     auto tInit = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
     std::cout << "initialization: " << std::fixed <<std::setprecision(0) << tInit.count() << " s" << std::endl;
  
-    // ITERATION: proceed through RRG hierarchy, increasing the scale m
-    auto res = rrg(Spre,K,Hs,{"Cutoff",eps,"ExtDim",s,"AGSPDim",D,"Iterative",doLanczos});
+    // ITERATION: do RRG, obtaining a single MPVS object
+    auto res = rrg(Spre,K,Hs,{"Cutoff",eps,"ExtDim",s,"OpDim",D,"Iterative",doLanczos});
     auto tF = std::chrono::high_resolution_clock::now();
     auto tRRG = std::chrono::duration_cast<std::chrono::duration<double>>(tF - tI);
     std::cout << "rrg elapsed: " << std::fixed << std::setprecision(0) << tRRG.count() << " s" << std::endl;
@@ -133,11 +133,11 @@ int main(int argc, char *argv[]) {
     for(auto j : range1(N-1)) std::cout << rightLinkIndex(res,j).dim() << " ";
     std::cout << std::endl;
 
-    auto [U,Dg] = diagPosSemiDef(inner(res,res),{"Truncate",false,"Tags","Ext"});
+    auto [U,Dg] = diagHermitian(inner(res,res),{"Tags","Ext"});
     Dg.apply([](Real r) {return 1.0/sqrt(r);});
     res.ref(eSite) *= U*dag(Dg);
     res.ref(eSite).noPrime();
-    auto [P,S] = diagPosSemiDef(-inner(res,H,res),{"Tags","Ext"});
+    auto [P,S] = diagHermitian(-inner(res,H,res),{"Tags","Ext"});
     res.ref(eSite) *= P;
     extIndex = findIndex(res(eSite),"Ext");
 
@@ -152,11 +152,11 @@ int main(int argc, char *argv[]) {
             res = applyMPO(eH,res,{"Cutoff",eps*1e-1,"MaxDim",MAX_BOND,"DoApprox",false});
             res.noPrime();
             }
-        auto [U,Dg] = diagPosSemiDef(inner(res,res),{"Truncate",false,"Tags","Ext"});
+        auto [U,Dg] = diagHermitian(inner(res,res),{"Tags","Ext"});
         Dg.apply([](Real r) {return 1.0/sqrt(r);});
         res.ref(eSite) *= U*dag(Dg);
         res.ref(eSite).noPrime();
-        auto [P,S] = diagPosSemiDef(-inner(res,H,res),{"Tags","Ext"});
+        auto [P,S] = diagHermitian(-inner(res,H,res),{"Tags","Ext"});
         res.ref(eSite) *= P;
         extIndex = findIndex(res(eSite),"Ext");
 

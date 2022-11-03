@@ -106,8 +106,8 @@ int main(int argc, char *argv[]) {
         Spre.push_back(MPVS(V,a%2 ? RIGHT : LEFT));
         }
 
-    // generate AGSP thermal operator exp(-H/t) using Trotter
-    auto K = Trotter(t,M,autoH,eps);
+    // generate AGSP thermal operator exp(-H/t)
+    auto K = Trotter(t,M,autoH,1e-10);
     std::cout << "maximum AGSP bond dim = " << maxLinkDim(K) << std::endl;
     
     // INITIALIZATION: reduce dimension by sampling from initial basis
@@ -117,9 +117,12 @@ int main(int argc, char *argv[]) {
         auto parity = pcur.parity();
         if(parity == LEFT) { pcur.reverse(); Hcur.reverse(); }
 
-        // return orthonormal basis of evecs
-        auto [P,S] = diagPosSemiDef(-inner(pcur,Hcur,pcur),{"MaxDim",2*s,"Tags","Ext"});
-        pcur.ref(1) *= P;
+        // generate block eigenbasis by hijacking tensorProdH code
+        Index di(QN({"Pf",0,-2}),1,"Ext");
+        tensorProdH init({setElt(di=1,dag(prime(di))=1),inner(pcur,Hcur,pcur)});
+        init.diag({"ExtDim",s,"Iterative",false,"Verbose",false});
+
+        pcur.ref(1) *= init.eigenvectors()*setElt(di=1);
         pcur.orthogonalize({"Cutoff",eps,"MaxDim",MAX_BOND,"RespectDegenerate",true});
         if(parity == LEFT) pcur.reverse();
         }
@@ -127,30 +130,26 @@ int main(int argc, char *argv[]) {
     auto tInit = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
     std::cout << "initialization: " << std::fixed <<std::setprecision(0) << tInit.count() << " s" << std::endl;
  
-    // ITERATION: proceed through RRG hierarchy, increasing the scale m
-    auto res = rrg(Spre,K,Hs,{"Cutoff",eps,"ExtDim",s,"AGSPDim",D,"Iterative",doLanczos});
+    // ITERATION: do RRG, obtaining a single MPVS object
+    auto res = rrg(Spre,K,Hs,{"Cutoff",eps,"ExtDim",s,"OpDim",D,"Iterative",doLanczos});
     auto tF = std::chrono::high_resolution_clock::now();
     auto tRRG = std::chrono::duration_cast<std::chrono::duration<double>>(tF - tI);
     std::cout << "rrg elapsed: " << std::fixed << std::setprecision(0) << tRRG.count() << " s" << std::endl;
 
-    // CLEANUP: do some rounds of TEBD, followed by DMRG
+    // CLEANUP: extract MPS from MPVS and optimize using DMRG
     auto [extIndex,eSite] = findExt(res);
-    auto nTEBD = 10lu , tSteps = M/2 , nDMRG = 2*N; 
-    auto eGS = 0.0 , minGap = 0.0 , convGS = 1.0;
-    auto eH = toExpH(autoH,1.0/(N/2*tSteps),{"Cutoff",epx});
-
-    for(auto j : range1(N-1)) std::cout << rightLinkIndex(res,j).dim() << " ";
-    std::cout << std::endl;
- 
-    auto [U,Dg] = diagPosSemiDef(inner(res,res),{"Truncate",false,"Tags","Ext"});
+    auto [U,Dg] = diagHermitian(inner(res,res),{"Tags","Ext"});
     Dg.apply([](Real r) {return 1.0/sqrt(r);});
     res.ref(eSite) *= U*dag(Dg);
     res.ref(eSite).noPrime();
-    auto [P,S] = diagPosSemiDef(-inner(res,H,res),{"Tags","Ext"});
+    auto [P,S] = diagHermitian(-inner(res,H,res),{"Tags","Ext"});
     res.ref(eSite) *= P;
     extIndex = findIndex(res(eSite),"Ext");
     
-    eGS = -S.elt(1,1);
+    for(auto j : range1(N-1)) std::cout << rightLinkIndex(res,j).dim() << " ";
+    std::cout << std::endl;
+ 
+    auto eGS = -S.elt(1,1);
     std::cout << std::fixed << std::setprecision(14) << eGS << " (q:" << 0 << " gap:"
               << std::scientific << std::setprecision(4) << -S.elt(2,2)-eGS << ") ";
     for(auto q : range(nblock(extIndex)))
@@ -158,30 +157,6 @@ int main(int argc, char *argv[]) {
             std::cout << std::scientific << std::setprecision(6) << -S.elt(2*q+1,2*q+1)-eGS << " (q:" << q << " gap:"
                       << std::scientific << std::setprecision(4) << -S.elt(2*q+2,2*q+2)+S.elt(2*q+1,2*q+1) << ") ";
     std::cout << std::endl;
-
-    std::cout << "TEBD steps:" << std::endl; 
-    for(auto i : range(nTEBD)) {
-        for(auto mval : range(tSteps)) {
-            res = applyMPO(eH,res,{"Cutoff",eps,"MaxDim",MAX_BOND,"DoApprox",false});
-            res.noPrime();
-            }
-        auto [U,Dg] = diagPosSemiDef(inner(res,res),{"Truncate",false,"Tags","Ext"});
-        Dg.apply([](Real r) {return 1.0/sqrt(r);});
-        res.ref(eSite) *= U*dag(Dg);
-        res.ref(eSite).noPrime();
-        auto [P,S] = diagPosSemiDef(-inner(res,H,res),{"Tags","Ext"});
-        res.ref(eSite) *= P;
-        extIndex = findIndex(res(eSite),"Ext");
-        
-        eGS = -S.elt(1,1);
-        std::cout << std::fixed << std::setprecision(14) << eGS << " (q:" << 0 << " gap:"
-                  << std::scientific << std::setprecision(4) << -S.elt(2,2)-eGS << ") ";
-        for(auto q : range(nblock(extIndex)))
-            if(q != 0)
-                std::cout << std::scientific << std::setprecision(6) << -S.elt(2*q+1,2*q+1)-eGS << " (q:" << q << " gap:"
-                          << std::scientific << std::setprecision(4) << -S.elt(2*q+2,2*q+2)+S.elt(2*q+1,2*q+1) << ") ";
-        std::cout << std::endl;
-        }
 
     using ePair = std::pair<double,MPS>;
     vector<vector<ePair> > eigenspace;
@@ -196,15 +171,17 @@ int main(int argc, char *argv[]) {
             }
         }
 
-    auto count = 0u;
+    // Run DMRG until all energies/gaps are converged, up to a max of nDMRG rounds
+    auto count = 0lu , nSweep = 6lu , nDMRG = 2*N; 
+    auto minGap = 0.0 , convGS = 1.0;
     std::cout << "DMRG steps:" << std::endl;
     vector<double> ePrev(eigenspace.size());
     do {
         for(auto q : args(eigenspace)) {
             auto& sector = eigenspace.at(q);
             ePrev.at(q) = sector.front().first;
-            dmrgMPO(H,sector,6,{"Cutoff",epx});
-            std::sort(sector.begin(),sector.end(),[](ePair const& a , ePair const& b) {return a.first < b.first;});
+            dmrgMPO(H,sector,nSweep,{"Cutoff",epx});
+            std::sort(sector.begin(),sector.end(),[](auto const& a , auto const& b) {return a.first < b.first;});
             }
         ++count;
         convGS = std::inner_product(eigenspace.begin(),eigenspace.end(),ePrev.begin(),0.0,
@@ -227,7 +204,7 @@ int main(int argc, char *argv[]) {
     } while(convGS > std::max(epx*N/4,std::min(eps,minGap*1e-2)) && count < nDMRG);
     if(logFile.is_open()) logFile.close();
 
-    // EXIT: write out spectral data, save ground state in each sector to disk
+    // EXIT: write out spectral data, save sector ground states to disk
     std::ostringstream().swap(ss);
     ss << id << "_sites.dat";
     auto sitesFilename = ss.str();

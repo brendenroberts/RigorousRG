@@ -1,8 +1,8 @@
 # this is a config file for RRG random XY model code
 N = 48
 n = 6 6 6 6 6 6 6 6
-t = 0.05
-M = 500
+t = 0.25
+M = 400
 s = 6
 D = 8
 eps = 1e-9
