@@ -99,7 +99,7 @@ int main(int argc, char *argv[]) {
         }
 
     // generate AGSP thermal operator exp(-H/t)
-    auto K = Trotter(t,M,autoH,eps);
+    auto K = Trotter(t,M,autoH,1e-10);
     std::cout << "maximum AGSP bond dim = " << maxLinkDim(K) << std::endl;
 
     // INITIALIZATION: reduce dimension by sampling from initial basis
@@ -125,56 +125,47 @@ int main(int argc, char *argv[]) {
     auto tRRG = std::chrono::duration_cast<std::chrono::duration<double>>(tF - tI);
     std::cout << "rrg elapsed: " << std::fixed << std::setprecision(0) << tRRG.count() << " s" << std::endl;
 
-    // CLEANUP: do some rounds of TEBD
+    // CLEANUP: extract MPS from MPVS and do some rounds of DMRG
     auto [extIndex,eSite] = findExt(res);
-    auto nTEBD = 5lu , tSteps = 25lu;
-    auto eH = toExpH(autoH,1.0/(N*tSteps),{"Cutoff",epx});
-
-    for(auto j : range1(N-1)) std::cout << rightLinkIndex(res,j).dim() << " ";
-    std::cout << std::endl;
-
-    auto [U,Dg] = diagHermitian(inner(res,res),{"Tags","Ext"});
+    auto [U,Dg] = diagHermitian(inner(res,res,eSite),{"Tags","Ext"});
     Dg.apply([](Real r) {return 1.0/sqrt(r);});
     res.ref(eSite) *= U*dag(Dg);
     res.ref(eSite).noPrime();
-    auto [P,S] = diagHermitian(-inner(res,H,res),{"Tags","Ext"});
+    auto [P,S] = diagHermitian(-inner(res,H,res,eSite),{"Tags","Ext"});
     res.ref(eSite) *= P;
     extIndex = findIndex(res(eSite),"Ext");
 
+    for(auto j : range1(N-1)) std::cout << rightLinkIndex(res,j).dim() << " ";
+    std::cout << std::endl;
     std::cout << "gs: " << std::fixed << std::setprecision(5) << -S.elt(1,1) << " gaps: ";
     for(auto j : range1(extIndex.dim()-1))
         std::cout << std::fixed << std::setprecision(4) << -S.elt(j+1,j+1)+S.elt(1,1) << " ";
     std::cout << std::endl;
 
-    std::cout << "TEBD steps:" << std::endl;
-    for(auto i : range(nTEBD)) {
-        for(auto mval : range(tSteps)) {
-            res = applyMPO(eH,res,{"Cutoff",eps*1e-1,"MaxDim",MAX_BOND,"DoApprox",false});
-            res.noPrime();
-            }
-        auto [U,Dg] = diagHermitian(inner(res,res),{"Tags","Ext"});
-        Dg.apply([](Real r) {return 1.0/sqrt(r);});
-        res.ref(eSite) *= U*dag(Dg);
-        res.ref(eSite).noPrime();
-        auto [P,S] = diagHermitian(-inner(res,H,res),{"Tags","Ext"});
-        res.ref(eSite) *= P;
-        extIndex = findIndex(res(eSite),"Ext");
-
-        std::cout << "gs: " << std::fixed << std::setprecision(5) << -S.elt(1,1) << " gaps: ";
-        for(auto j : range1(extIndex.dim()-1))
-            std::cout << std::fixed << std::setprecision(4) << -S.elt(j+1,j+1)+S.elt(1,1) << " ";
-        std::cout << std::endl;
-        }
-
     using ePair = std::pair<double,MPS>;
-    vector<ePair> eigenspace;
-    for(auto i : range1(s)) {
+    vector<ePair> eigenstates;
+    for(auto i : range1(dim(extIndex))) {
         auto fc = MPS(res);
-        fc.ref(eSite) *= setElt(dag(extIndex)(i));
+        fc.ref(eSite) *= setElt(dag(extIndex)=i);
         fc.orthogonalize({"Cutoff",epx,"RespectDegenerate",true});
         fc.normalize();
-        eigenspace.push_back({inner(fc,H,fc),fc});
+        eigenstates.push_back({inner(fc,H,fc),fc});
         }
+
+    std::cout << "DMRG steps:" << std::endl;
+    auto nSweep = 2lu , nDMRG = 8lu;
+    auto t3 = std::chrono::high_resolution_clock::now();
+    for(auto i : range(nDMRG)) {
+        dmrgMPO(H,eigenstates,nSweep,{"Exclude",true,"Cutoff",eps,"Penalty",5.0});
+        std::sort(eigenstates.begin(), eigenstates.end(),[](auto const& a, auto const& b) { return a.first < b.first; });
+        std::cout << "gs: " << std::fixed << std::setprecision(5) << eigenstates.at(0).first << " gaps: ";
+        for(auto j : range1(eigenstates.size()-1))
+            std::cout << std::fixed << std::setprecision(4) << eigenstates.at(j).first-eigenstates.at(0).first << " ";
+        std::cout << std::endl;
+        }
+    auto t4 = std::chrono::high_resolution_clock::now();
+    auto tDMRG = std::chrono::duration_cast<std::chrono::duration<double>>(t4 - t3);
+    std::cout << "dmrg elapsed: " << std::fixed << std::setprecision(0) << tDMRG.count() << " s" << std::endl;
 
     // EXIT: write out spectral data, save ground state in each sector to disk
     std::ostringstream().swap(ss);
@@ -191,13 +182,13 @@ int main(int argc, char *argv[]) {
             << " " << std::setprecision(2) << h << " " << std::setw(2) << s << " " << std::setw(2) << D
             << " " << std::setprecision(3) << t << " " << std::setw(4) << M << " ";
     for(auto j : range(s)) {
-        dbEntry << std::setprecision(16) << eigenspace.at(j).first << " ";
+        dbEntry << std::setprecision(16) << eigenstates.at(j).first << " ";
 
         std::ostringstream().swap(ss);
         ss.fill('0');
         ss << id << "_e" << std::setw(2) << j << ".dat";
         auto stateFilename = ss.str();
-        writeToFile(stateFilename,eigenspace.at(j).second);
+        writeToFile(stateFilename,eigenstates.at(j).second);
         }
     dbEntry << std::endl;
 
