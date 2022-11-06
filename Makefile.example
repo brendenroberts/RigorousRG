@@ -25,11 +25,7 @@ OBJECTS=$(patsubst %.cc,%.o, $(CCFILES))
 
 #Targets -----------------
 
-build: $(APP)
-
-build: rrg_ising rrg_random_xy
-
-all: rrg_ising rrg_random_xy
+all: rrg_ising rrg_random_xy rrg_random_hubbard
 
 rrg_ising: $(ITENSOR_LIBS) $(TENSOR_HEADERS)
 	$(CCCOM) $(CCFLAGS) Ising/rrg_ising.cc $(CCFILES) -o rrg_ising $(LIBFLAGS)
@@ -37,6 +33,9 @@ rrg_ising: $(ITENSOR_LIBS) $(TENSOR_HEADERS)
 rrg_random_xy: $(ITENSOR_LIBS) $(TENSOR_HEADERS)
 	$(CCCOM) $(CCFLAGS) RandomXY/rrg_random_xy.cc $(CCFILES) -o rrg_random_xy $(LIBFLAGS)
 
+rrg_random_xy: $(ITENSOR_LIBS) $(TENSOR_HEADERS)
+	$(CCCOM) $(CCFLAGS) RandomHubbard/rrg_random_hubbard.cc $(CCFILES) -o rrg_random_hubbard $(LIBFLAGS)
+
 clean:
-	rm -rf *.o rrg_ising rrg_random_xy
+	rm -rf *.o rrg_ising rrg_random_xy rrg_random_hubbard
 

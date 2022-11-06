@@ -1,0 +1,21 @@
+# this is a config file for RRG random XYZ model code
+N = 60
+n = 8 7 8 7 7 8 7 8
+tau = 1.25
+M = 400
+s = 24
+D = 10
+qnNf = 30
+qnSpread = 2
+eps = 1e-7
+id = random_hubbard_N60
+dxFile = RandomHubbard/disorder_x.example
+dyFile = RandomHubbard/disorder_y.example
+log = true
+t = 1.0
+lne = 1.0
+lee = 2.0
+Z = 1.0
+zeta = 0.5
+fex = 0.2
+a = 0.2
