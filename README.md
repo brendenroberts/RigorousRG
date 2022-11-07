@@ -8,3 +8,4 @@ To run RRG for one of the example models, simply use `make` to compile the examp
 Then run the compiled executable, providing the example configuration file provided in the appropriate directory as a command-line argument.
 
 Currently the example models which are implemented are a particular nonintegrable Ising model (where the driver code solves for the ground states and bottom of the excitation band), which you can compile with `make rrg_ising`; and the disordered XY model (where the driver code resolves the global symmetry and focuses on computing the gap), which you can compile with `make rrg_random_xy`.
+Finally there is an example with U(1) symmetry, a disordered spinless Hubbard model for which you should `make rrg_random_hubbard`; in this case the goal is to obtain a numerically exact low-energy spectrum at half filling.

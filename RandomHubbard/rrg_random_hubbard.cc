@@ -4,7 +4,6 @@
 #include <iostream>
 #include <iomanip>
 #include <chrono>
-#include "itensor/util/print_macro.h"
 
 double dist(int i , int j , vector<double> dx , vector<double> dy) {
     return sqrt((i+dx.at(i)-j-dx.at(j))*(i+dx.at(i)-j-dx.at(j)) + (dy.at(i)-dy.at(j))*(dy.at(i)-dy.at(j)));
