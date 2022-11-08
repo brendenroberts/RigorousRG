@@ -3,7 +3,6 @@
 #include <fstream>
 #include <iostream>
 #include <iomanip>
-#include <chrono>
 
 int main(int argc, char *argv[]) {
     if(argc != 2) { std::cerr << "usage: " << argv[0] << " config_file" << std::endl; return 1; }
@@ -20,7 +19,7 @@ int main(int argc, char *argv[]) {
 
     // RRG & AGSP parameters
     const size_t N   = stoul(configParams.at("N")); // system size
-    const double t   = stod(configParams.at("t"));  // AGSP temperature
+    const double tau = stod(configParams.at("tau"));  // AGSP temperature
     const size_t M   = stoul(configParams.at("M")); // num Trotter steps
     const size_t s   = stoul(configParams.at("s")); // formal s param
     const size_t D   = stoul(configParams.at("D")); // formal D param
@@ -31,6 +30,8 @@ int main(int argc, char *argv[]) {
     const double J = stod(configParams.at("J")); // Ising interaction strength
     const double g = stod(configParams.at("g")); // transverse field strength
     const double h = stod(configParams.at("h")); // longitudinal field strength
+    const auto hSpGen = [](size_t x) -> SiteSet { return SpinHalf(x,{"ConserveQNs",false}); };
+    auto const& hs = hSpGen(N);
 
     // IO stream stuff for setting up output filenames
     auto configId = configParams.find("id");
@@ -53,22 +54,7 @@ int main(int argc, char *argv[]) {
             }
     std::ostringstream().swap(ss);
 
-    // initialize hierarchy structure, generate product basis for initial blocking
-    auto tI = std::chrono::high_resolution_clock::now();
-    auto t1 = std::chrono::high_resolution_clock::now();
-    auto blockNs = parseBlockSizes(configParams.at("n"));
-    if(blockNs.back().back() != N) { std::cerr << "sum(n) not equal to N" << std::endl; return 1; }
-    vector<vector<SiteSet> > hsps;
-    for(auto const& v : blockNs) {
-        hsps.push_back(vector<SiteSet>());
-        for(auto const & n : v) {
-            SiteSet cur = SpinHalf(n,{"ConserveQNs",false});
-            hsps.back().push_back(cur);
-            }
-        }
-
-    // create MPO for H with open boundary conditions, also block Hamiltonians
-    auto const& hs = hsps.back().back();
+    // Create MPO for H using AutoMPO functionality
     AutoMPO autoH(hs);
     for(auto i = 0 ; static_cast<size_t>(i) < N ; ++i) {
         if(static_cast<size_t>(i) != N-1)
@@ -77,53 +63,13 @@ int main(int argc, char *argv[]) {
         autoH += -h*2.0,"Sz",i+1;
         }
     auto H = toMPO(autoH,{"Exact",true});
-    vector<vector<MPO> > Hs(hsps.size());
-    for(auto i : args(hsps)) blockHs(Hs.at(i),autoH,hsps.at(i));
 
-    // generate complete basis for exact diagonalization under initial blocking
-    // TODO: this could probably be generic, moved to util.cc
-    vector<MPVS> Spre;
-    for(auto a : args(hsps.front())) {
-        auto n = length(hsps.front().at(a));
-        auto p = static_cast<int>(pow(2,n));
-        vector<MPS> V;
-        for(auto i : range(p)) {
-            InitState istate(hsps.front().at(a),"Up");
-            for(auto j : range1(n))
-                if(i/static_cast<int>(pow(2,j-1))%2 == 1) istate.set(j,"Dn");
-            auto st = MPS(istate);
-            V.push_back(st);
-            }
-        
-        Spre.push_back(MPVS(V,a%2==1?RIGHT:LEFT));
-        }
-
-    // generate AGSP thermal operator exp(-H/t)
-    auto K = Trotter(t,M,autoH,1e-10);
+    // Generate AGSP thermal operator exp(-H/t)
+    auto K = Trotter(tau,M,autoH,1e-10);
     std::cout << "maximum AGSP bond dim = " << maxLinkDim(K) << std::endl;
 
-    // INITIALIZATION: reduce dimension by sampling from initial basis
-    for(auto ll : args(Spre)) {
-        auto& pcur = Spre.at(ll);
-        auto Hcur = MPOS(Hs.at(0).at(ll));
-        auto parity = pcur.parity();
-        if(parity == LEFT) { pcur.reverse(); Hcur.reverse(); }
-
-        // return orthonormal basis of evecs
-        auto [P,S] = diagPosSemiDef(-inner(pcur,Hcur,pcur),{"MaxDim",s,"Tags","Ext"});
-        pcur.ref(1) *= P;
-        pcur.orthogonalize({"Cutoff",eps,"MaxDim",MAX_BOND,"RespectDegenerate",true});
-        if(parity == LEFT) pcur.reverse();
-        }
-    auto t2 = std::chrono::high_resolution_clock::now();
-    auto tInit = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
-    std::cout << "initialization: " << std::fixed <<std::setprecision(0) << tInit.count() << " s" << std::endl;
- 
-    // ITERATION: do RRG, obtaining a single MPVS object
-    auto res = rrg(Spre,K,Hs,{"Cutoff",eps,"ExtDim",s,"OpDim",D,"Iterative",doLanczos});
-    auto tF = std::chrono::high_resolution_clock::now();
-    auto tRRG = std::chrono::duration_cast<std::chrono::duration<double>>(tF - tI);
-    std::cout << "rrg elapsed: " << std::fixed << std::setprecision(0) << tRRG.count() << " s" << std::endl;
+    // Do RRG, obtaining a single MPVS object
+    auto [res,time] = rrg(autoH,K,configParams.at("n"),hSpGen,{"Cutoff",eps,"ExtDim",s,"OpDim",D,"Iterative",doLanczos});
 
     // CLEANUP: extract MPS from MPVS and do some rounds of DMRG
     auto [extIndex,eSite] = findExt(res);
@@ -142,7 +88,7 @@ int main(int argc, char *argv[]) {
         std::cout << std::fixed << std::setprecision(4) << -S.elt(j+1,j+1)+S.elt(1,1) << " ";
     std::cout << std::endl;
 
-    using ePair = std::pair<double,MPS>;
+    using ePair = pair<double,MPS>;
     vector<ePair> eigenstates;
     for(auto i : range1(dim(extIndex))) {
         auto fc = MPS(res);
@@ -177,10 +123,10 @@ int main(int argc, char *argv[]) {
     std::ostringstream dbEntry;
     dbEntry.setf(std::ios::fixed);
     dbEntry.fill('0');
-    dbEntry << "# N J g h s D t M E0 ..." << std::endl;
+    dbEntry << "# N J g h s D tau M time E0 ..." << std::endl;
     dbEntry << std::setw(2) << N << " " << std::setprecision(2) << J << " " << std::setprecision(2) << g
             << " " << std::setprecision(2) << h << " " << std::setw(2) << s << " " << std::setw(2) << D
-            << " " << std::setprecision(3) << t << " " << std::setw(4) << M << " ";
+            << " " << std::setprecision(3) << tau << " " << std::setw(4) << M << " " << std::setprecision(2) << time << " ";
     for(auto j : range(s)) {
         dbEntry << std::setprecision(16) << eigenstates.at(j).first << " ";
 

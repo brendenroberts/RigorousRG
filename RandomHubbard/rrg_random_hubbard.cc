@@ -3,7 +3,6 @@
 #include <fstream>
 #include <iostream>
 #include <iomanip>
-#include <chrono>
 
 double dist(int i , int j , vector<double> dx , vector<double> dy) {
     return sqrt((i+dx.at(i)-j-dx.at(j))*(i+dx.at(i)-j-dx.at(j)) + (dy.at(i)-dy.at(j))*(dy.at(i)-dy.at(j)));
@@ -47,11 +46,11 @@ int main(int argc, char *argv[]) {
     const double eps = stod(configParams.at("eps")); // MPVS error tolerance
     const bool doLanczos = true; // diag restricted Hamiltonian iteratively?
 
-    // user can request more than s states at the final step
+    // User can request more than s states at the final step
     const size_t sts = configParams.find("states") == configParams.end() ? s : stoul(configParams.at("states"));
 
-    // state targeting parameters (for continuous symmetry)
-    const vector<int> targetQNs = {stoi(configParams.at("qnNf"))}; 
+    // State targeting parameters (for continuous symmetry)
+    const vector<int> targetQNs = {stoi(configParams.at("Nf"))}; 
     const int qnSpread = stoi(configParams.at("qnSpread")); // maximum allowed deviation for local blocks
 
     // Hamitonian parameters
@@ -62,8 +61,10 @@ int main(int argc, char *argv[]) {
     const double zeta = stod(configParams.at("zeta"));
     const double f_ex = stod(configParams.at("fex"));
     const double a = stod(configParams.at("a")); // exp hopping correction
+    const auto hSpGen = [](size_t x) -> SiteSet { return Fermion(x,{"ConserveQNs",true}); };
+    auto const& hs = hSpGen(N);
 
-    // load disorder realization from text file
+    // Load disorder realization from text file
     const auto lineNum = atoi(argv[2]);
     vector<double> dx , dy;
     if(lineNum < 0) { dx = vector<double>(N,0.0); dy = vector<double>(N,0.0); }
@@ -92,24 +93,8 @@ int main(int argc, char *argv[]) {
             }
     std::ostringstream().swap(ss);
 
-    // initialize hierarchy structure, generate product basis for initial blocking
-    auto tI = std::chrono::high_resolution_clock::now();
-    auto t1 = std::chrono::high_resolution_clock::now();
-    auto blockNs = parseBlockSizes(configParams.at("n"));
-    if(blockNs.back().back() != N) { std::cerr << "sum(n) not equal to N" << std::endl; return 1; }
-    vector<vector<SiteSet> > hsps;
-    for(auto const& v : blockNs) {
-        hsps.push_back(vector<SiteSet>());
-        for(auto const & n : v) {
-            SiteSet cur = Fermion(n,{"ConserveQNs",true});
-            hsps.back().push_back(cur);
-            }
-        }
-
-    // create MPO for H with open boundary conditions, also block Hamiltonians
-    auto const& hs = hsps.back().back();
+    // Create MPO for H using AutoMPO functionality
     AutoMPO autoH(hs);
-
     for(auto i = 0 ; static_cast<size_t>(i) < N ; ++i) {
         if(static_cast<size_t>(i) < N-1) { 
             auto hop = exp(-(r(i,i+1)-1)/a);
@@ -128,60 +113,13 @@ int main(int argc, char *argv[]) {
         }
     auto H = toMPO(autoH,{"Cutoff",epx});
 
-    vector<vector<MPO> > Hs(hsps.size());
-    for(auto i : args(hsps)) blockHs(Hs.at(i),autoH,hsps.at(i),{"Cutoff",epx});
-
-    // generate complete basis for exact diagonalization under initial blocking
-    vector<MPVS> Spre;
-    for(auto a : args(hsps.front())) {
-        auto n = length(hsps.front().at(a));
-        auto p = static_cast<int>(pow(2,n));
-        vector<MPS> V;
-        for(auto i : range(p)) {
-            InitState istate(hsps.front().at(a),"Emp");
-            for(auto j : range1(n))
-                if(i/static_cast<int>(pow(2,j-1))%2 == 1) istate.set(j,"Occ");
-            auto st = MPS(istate);
-            V.push_back(st);
-            }
-
-        Spre.push_back(MPVS(V,a%2 ? RIGHT : LEFT));
-        }
-
-    // generate AGSP thermal operator exp(-H/t)
+    // Generate AGSP thermal operator exp(-H/t)
     auto K = Trotter(tau,M,autoH,1e-10);
     std::cout << "maximum AGSP bond dim = " << maxLinkDim(K) << std::endl;
 
-    // INITIALIZATION: reduce dimension by sampling from initial basis
-    for(auto ll : args(Spre)) {
-        auto& pcur = Spre.at(ll);
-        auto Hcur = MPOS(Hs.at(0).at(ll));
-        auto parity = pcur.parity();
-        if(parity == LEFT) { pcur.reverse(); Hcur.reverse(); }
-
-        vector<int> localQNs(targetQNs.size());
-        std::transform(targetQNs.begin(),targetQNs.end(),localQNs.begin(),
-                       [&Hcur,&N](auto &val){ return divRoundClosest(val*length(Hcur),N); });
-
-        // generate block eigenbasis by hijacking tensorProdH code
-        Index di(QN({"Nf",0,-1}),1,"Ext");
-        tensorProdH init({setElt(di=1,dag(prime(di))=1),inner(pcur,Hcur,pcur)});
-        init.diag(localQNs,{"ExtDim",s,"QNSpread",qnSpread,"Iterative",false,"Verbose",false});
-
-        pcur.ref(1) *= init.eigenvectors()*setElt(di=1);
-        pcur.orthogonalize({"Cutoff",eps,"MaxDim",MAX_BOND,"RespectDegenerate",true});
-        if(parity == LEFT) pcur.reverse();
-        }
-    auto t2 = std::chrono::high_resolution_clock::now();
-    auto tInit = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
-    std::cout << "initialization: " << std::fixed <<std::setprecision(0) << tInit.count() << " s" << std::endl;
- 
-    // ITERATION: do RRG, obtaining a single MPVS object
-    auto res = rrg(Spre,K,Hs,targetQNs,{"Cutoff",eps,"ExtDim",s,"OpDim",D,"ExtDimLast",sts,
-                                        "TruncateQNs",true,"QNSpread",qnSpread,"Iterative",doLanczos});
-    auto tF = std::chrono::high_resolution_clock::now();
-    auto tRRG = std::chrono::duration_cast<std::chrono::duration<double>>(tF - tI);
-    std::cout << "rrg elapsed: " << std::fixed << std::setprecision(0) << tRRG.count() << " s" << std::endl;
+    // Do RRG, obtaining a single MPVS object
+    auto [res,time] = rrg(autoH,K,configParams.at("n"),hSpGen,targetQNs,{"Cutoff",eps,"ExtDim",s,"OpDim",D,"ExtDimLast",sts,
+                            "TruncateQNs",true,"QNSpread",qnSpread,"Iterative",doLanczos});
 
     // CLEANUP: extract MPS from MPVS and do some rounds of DMRG
     auto [extIndex,eSite] = findExt(res);
@@ -198,7 +136,7 @@ int main(int argc, char *argv[]) {
     for(auto n : range1(dim(extIndex))) std::cout << std::fixed << std::setprecision(8) << -S.elt(n,n) << " ";
     std::cout << std::endl;
 
-    using ePair = std::pair<double,MPS>;
+    using ePair = pair<double,MPS>;
     vector<ePair> eigenstates;
     for(auto i : range1(dim(extIndex))) {
         auto fc = MPS(res);
@@ -233,13 +171,13 @@ int main(int argc, char *argv[]) {
     dbEntry.setf(std::ios::fixed);
     dbEntry.fill('0');
     for(auto i : range(eigenstates)) {
-        dbEntry << "# N s D tau M t lne lee zeta fex a Nf lineNum eIndex E" << std::endl;
-        dbEntry << std::setw(3) << N << " " << std::setw(2) << s << " " << std::setw(2) << D << " "
-                << std::setprecision(3) << tau << " " << std::setw(4) << M << " " << std::setw(4) << t << " "
-                << std::setw(4) << lambda_ne << " " << std::setw(4) << lambda_ee << " " << std::setw(4) << zeta << " "
-                << std::setw(4) << f_ex << " " << std::setw(4) << a << " " << std::setw(3) << -qn(extIndex,1).val(1) << " "
-                << std::setw(4) << lineNum << " " << std::setw(4) << i << " "
-                << std::setprecision(16) << eigenstates.at(i).first << std::endl;
+        dbEntry << "# N s D tau M t lne lee zeta fex a Nf time lineNum eIndex E" << std::endl;
+        dbEntry << std::setw(3) << N << " " << std::setw(2) << s << " " << std::setw(2) << D
+                << " " << std::setprecision(3) << tau << " " << std::setw(4) << M << " " << std::setw(4) << t
+                << " " << std::setw(4) << lambda_ne << " " << std::setw(4) << lambda_ee << " " << std::setw(4) << zeta
+                << " " << std::setw(4) << f_ex << " " << std::setw(4) << a << " " << std::setw(3) << -qn(extIndex,1).val(1)
+                << " " << std::setprecision(2) << time << " " << std::setw(4) << lineNum << " " << std::setw(4) << i
+                << " " << std::setprecision(16) << eigenstates.at(i).first << std::endl;
 
         std::ostringstream().swap(ss);
         ss.fill('0');

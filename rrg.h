@@ -4,6 +4,7 @@
 #include "itensor/util/print_macro.h"
 #include "itensor/mps/autompo.h"
 #include "itensor/mps/dmrg.h"
+#include <functional>
 #include <map>
 
 #define LEFT false
@@ -15,6 +16,8 @@
 using namespace itensor;
 using std::vector;
 using std::string;
+using std::function;
+using std::pair;
 
 // more sensitive threshold for single MPS or MPO
 const double epx = 1E-14;
@@ -50,8 +53,8 @@ public:
 
 // interface for solver (ITensor Davidson algorithm), implemented in tensorProdH.cc
 class tensorProdH {
-using LRTen = std::pair<ITensor,ITensor>;
-using LRInd = std::pair<Index,Index>;
+using LRTen = pair<ITensor,ITensor>;
+using LRInd = pair<Index,Index>;
 
 protected:
     const LRTen ten;
@@ -59,8 +62,7 @@ protected:
     ITensor evc;
 
 public:
-    tensorProdH(LRTen HH) : ten(HH),ind({findIndex(HH.first, "Ext,0"),
-                                          findIndex(HH.second,"Ext,0")}) { }
+    tensorProdH(LRTen HH) : ten(HH),ind({findIndex(HH.first,"Ext,0"),findIndex(HH.second,"Ext,0")}) { }
     void product(ITensor const& , ITensor&) const;
     void diag(vector<int> const& , Args const& = Args::global());
     void diag(Args const& = Args::global());
@@ -68,22 +70,18 @@ public:
     ITensor eigenvectors() const { return evc; }
 };
 
-// main loop implemented in rrg.cc 
-MPVS rrg(vector<MPVS>& , MPO const& , vector<vector<MPO> > const& , vector<int> const& , Args const& = Args::global()); 
+// main loop implemented in rrg.cc
+pair<MPVS,double> rrg(AutoMPO const& , MPO const& , string const& , function<SiteSet(size_t)> const& , vector<int> const& , Args const& = Args::global());
 
-MPVS rrg(vector<MPVS>& , MPO const& , vector<vector<MPO> > const& , Args const& = Args::global()); 
+pair<MPVS,double> rrg(AutoMPO const& , MPO const& , string const& , function<SiteSet(size_t)> const& , Args const& = Args::global());
 
-// subroutines implemented in util.cc
+// auxiliary subroutines implemented in util.cc
 Index extIndex(ITensor const& , string = "Ext");
 
 template<class MPSLike>
-std::pair<Index,size_t> findExt(MPSLike const&);
+pair<Index,size_t> findExt(MPSLike const&);
 
 void parseConfig(std::ifstream& , std::map<string,string>&);
-
-vector<vector<size_t> > parseBlockSizes(string);
-
-void blockHs(vector<MPO>& , AutoMPO const& , vector<SiteSet> const& , Args const& = Args::global());
 
 IndexSet siteInds(MPVS const&);
 
@@ -93,15 +91,9 @@ ITensor inner(MPVS const& , MPO const& , MPVS const&);
 
 ITensor inner(MPVS const& , MPO const& , MPVS const& , size_t);
 
-void dmrgMPO(MPO const& , vector<std::pair<double,MPS> >& , int , Args const& = Args::global()); 
+void dmrgMPO(MPO const& , vector<pair<double,MPS> >& , int , Args const& = Args::global()); 
 
 MPO Trotter(double , size_t , AutoMPO const& , double); 
-
-void sliceMPO(MPO const& , MPOS& , int , size_t = 0lu);
-
-std::pair<ITensor,ITensor> tensorProdContract(MPVS const&, MPVS const&, MPO const&);
-
-void tensorProduct(MPVS const& , MPVS const& , MPVS& , ITensor const& , Args const& = Args::global());
 
 MPVS applyMPO(MPO const&, MPVS const&, Args = Args::global());
 

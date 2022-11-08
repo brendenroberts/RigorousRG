@@ -3,7 +3,6 @@
 #include <fstream>
 #include <iostream>
 #include <iomanip>
-#include <chrono>
 
 int main(int argc, char *argv[]) {
     if(argc != 2) { std::cerr << "usage: " << argv[0] << " config_file" << std::endl; return 1; }
@@ -27,12 +26,24 @@ int main(int argc, char *argv[]) {
     const double eps = stod(configParams.at("eps")); // MPVS error tolerance
     const bool doLanczos = true; // diag restricted Hamiltonian iteratively?
 
-    // generate Hamiltonian couplings using C++ random library
+    // Hamiltonian parameters
+    const double Gamma = stod(configParams.at("Gamma")); // disorder strength
+    const auto hSpGen = [](size_t x) -> SiteSet { return Fermion(x,{"ConserveQNs",true,"ConserveNf",false}); };
+    auto const& hs = hSpGen(N);
+
+    // Generate Hamiltonian couplings using C++ random library
     std::random_device rd;
     const unsigned long seed = (configParams.find("seed") == configParams.end() ? rd() : stoul(configParams.at("seed")));
     std::linear_congruential_engine<unsigned long, 6364136223846793005ul, 1442695040888963407ul, 0ul> gen(seed);
     std::uniform_real_distribution<double> udist(0.0,1.0);
-    
+    std::cout << "seed is " << seed << std::endl;
+
+    vector<double> J(2*(N-1));
+    for(auto i = 0u ; i < N-1 ; ++i) {
+        J.at(2*i+0) = pow(udist(gen),Gamma);
+        J.at(2*i+1) = pow(udist(gen),Gamma);
+        }
+
     // IO stream stuff for setting up output filenames
     auto configId = configParams.find("id");
     ss.setf(std::ios::fixed);
@@ -52,32 +63,8 @@ int main(int argc, char *argv[]) {
             std::cout.rdbuf(logFile.rdbuf()); // redirect cout to log file buffer
             }
     std::ostringstream().swap(ss);
-    std::cout << "seed is " << seed << std::endl;
 
-    vector<double> J(2*(N-1));
-    const double Gamma = stod(configParams.at("Gamma")); // disorder strength
-    for(auto i = 0u ; i < N-1 ; ++i) {
-        J.at(2*i+0) = pow(udist(gen),Gamma);
-        J.at(2*i+1) = pow(udist(gen),Gamma);
-        }
-
-    // initialize hierarchy structure, generate product basis for initial blocking
-    // use Fermion local Hilbert space, which is natural to conserve parity
-    auto tI = std::chrono::high_resolution_clock::now();
-    auto t1 = std::chrono::high_resolution_clock::now();
-    auto blockNs = parseBlockSizes(configParams.at("n"));
-    if(blockNs.back().back() != N) { std::cerr << "sum(n) not equal to N" << std::endl; return 1; }
-    vector<vector<SiteSet> > hsps;
-    for(auto const& v : blockNs) {
-        hsps.push_back(vector<SiteSet>());
-        for(auto const & n : v) {
-            SiteSet cur = Fermion(n,{"ConserveQNs",true,"ConserveNf",false});
-            hsps.back().push_back(cur);
-            }
-        }
-
-    // create MPO for H with open boundary conditions, also block Hamiltonians
-    auto const& hs = hsps.back().back();
+    // Create MPO for H using AutoMPO functionality
     AutoMPO autoH(hs);
     for(auto i = 0 ; static_cast<size_t>(i) < N-1 ; ++i) {
         autoH += (J.at(2*i+0)+J.at(2*i+1)),"Cdag",i+1,   "C",i+2;
@@ -86,55 +73,13 @@ int main(int argc, char *argv[]) {
         autoH += (J.at(2*i+0)-J.at(2*i+1)),   "C",i+2,   "C",i+1;
         }
     auto H = toMPO(autoH,{"Exact",true});
-    vector<vector<MPO> > Hs(hsps.size());
-    for(auto i : args(hsps)) blockHs(Hs.at(i),autoH,hsps.at(i));
 
-    // generate complete basis for exact diagonalization under initial blocking
-    vector<MPVS> Spre;
-    for(auto a : args(hsps.front())) {
-        auto n = length(hsps.front().at(a));
-        auto p = static_cast<int>(pow(2,n));
-        vector<MPS> V;
-        for(auto i : range(p)) {
-            InitState istate(hsps.front().at(a),"Emp");
-            for(auto j : range1(n))
-                if(i/static_cast<int>(pow(2,j-1))%2 == 1) istate.set(j,"Occ");
-            auto st = MPS(istate);
-            V.push_back(st);
-            }
-        
-        Spre.push_back(MPVS(V,a%2 ? RIGHT : LEFT));
-        }
-
-    // generate AGSP thermal operator exp(-H/t)
+    // Generate AGSP thermal operator exp(-H/t)
     auto K = Trotter(t,M,autoH,1e-10);
     std::cout << "maximum AGSP bond dim = " << maxLinkDim(K) << std::endl;
-    
-    // INITIALIZATION: reduce dimension by sampling from initial basis
-    for(auto ll : args(Spre)) {
-        auto& pcur = Spre.at(ll);
-        auto Hcur = MPOS(Hs.at(0).at(ll));
-        auto parity = pcur.parity();
-        if(parity == LEFT) { pcur.reverse(); Hcur.reverse(); }
 
-        // generate block eigenbasis by hijacking tensorProdH code
-        Index di(QN({"Pf",0,-2}),1,"Ext");
-        tensorProdH init({setElt(di=1,dag(prime(di))=1),inner(pcur,Hcur,pcur)});
-        init.diag({"ExtDim",s,"Iterative",false,"Verbose",false});
-
-        pcur.ref(1) *= init.eigenvectors()*setElt(di=1);
-        pcur.orthogonalize({"Cutoff",eps,"MaxDim",MAX_BOND,"RespectDegenerate",true});
-        if(parity == LEFT) pcur.reverse();
-        }
-    auto t2 = std::chrono::high_resolution_clock::now();
-    auto tInit = std::chrono::duration_cast<std::chrono::duration<double>>(t2 - t1);
-    std::cout << "initialization: " << std::fixed <<std::setprecision(0) << tInit.count() << " s" << std::endl;
- 
-    // ITERATION: do RRG, obtaining a single MPVS object
-    auto res = rrg(Spre,K,Hs,{"Cutoff",eps,"ExtDim",s,"OpDim",D,"Iterative",doLanczos});
-    auto tF = std::chrono::high_resolution_clock::now();
-    auto tRRG = std::chrono::duration_cast<std::chrono::duration<double>>(tF - tI);
-    std::cout << "rrg elapsed: " << std::fixed << std::setprecision(0) << tRRG.count() << " s" << std::endl;
+    // Do RRG, obtaining a single MPVS object
+    auto [res,time] = rrg(autoH,K,configParams.at("n"),hSpGen,{"Cutoff",eps,"ExtDim",s,"OpDim",D,"Iterative",doLanczos});
 
     // CLEANUP: extract MPS from MPVS and optimize using DMRG
     auto [extIndex,eSite] = findExt(res);
@@ -158,7 +103,7 @@ int main(int argc, char *argv[]) {
                       << std::scientific << std::setprecision(4) << -S.elt(2*q+2,2*q+2)+S.elt(2*q+1,2*q+1) << ") ";
     std::cout << std::endl;
 
-    using ePair = std::pair<double,MPS>;
+    using ePair = pair<double,MPS>;
     vector<vector<ePair> > eigenspace;
     for(int q : range(nblock(extIndex))) {
         eigenspace.push_back(vector<ePair>());
@@ -215,10 +160,11 @@ int main(int argc, char *argv[]) {
     dbEntry.setf(std::ios::fixed);
     dbEntry.fill('0');
     for(auto q : args(eigenspace)) {
-        dbEntry << "# N G s D t M seed conv q E0 ..." << std::endl;
+        dbEntry << "# N G s D t M seed time conv q E0 ..." << std::endl;
         dbEntry << std::setw(2) << N << " " << std::setprecision(2) << Gamma << " " << std::setw(2) << s
                 << " " << std::setw(2) << D << " " << std::setprecision(3) << t << " " << std::setw(4) << M
-                << " " << std::setw(10) << seed << " " << std::setw(1) << (count == nDMRG ? 0 : 1)
+                << " " << std::setw(10) << seed << " " << std::setprecision(2) << time
+                << " " << std::setw(1) << (count == nDMRG ? 0 : 1)
                 << " " << std::setw(1) << q << " ";
         auto const& sector = eigenspace.at(q);
         for(auto j : range(2)) {

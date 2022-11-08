@@ -2,10 +2,10 @@
 N = 60
 n = 8 7 8 7 7 8 7 8
 tau = 1.25
-M = 400
+M = 300
 s = 24
-D = 10
-qnNf = 30
+D = 8
+Nf = 30
 qnSpread = 2
 eps = 1e-7
 id = random_hubbard_N60

@@ -22,15 +22,15 @@ Index extIndex(ITensor const& A , string tag) {
     }
 
 template<class MPSLike>
-std::pair<Index,size_t> findExt(MPSLike const& psi) {
+pair<Index,size_t> findExt(MPSLike const& psi) {
     for(auto j = 1 ; j <= length(psi) ; ++j)
         if(auto ret = findIndex(psi(j),"Ext"))
             return {ret,j};
     
     return {Index(),0lu};
     }
-template std::pair<Index,size_t> findExt(MPS const&);
-template std::pair<Index,size_t> findExt(MPO const&);
+template pair<Index,size_t> findExt(MPS const&);
+template pair<Index,size_t> findExt(MPO const&);
 
 Index sortExt(ITensor &A) {
     auto [C,c] = combiner(findInds(A,"Ext"),{"Tags","Ext"});
@@ -53,59 +53,6 @@ void parseConfig(std::ifstream &cstrm , std::map<string,string> &props) {
         props.emplace(key,val);
         }
     
-    return;
-    }
-
-vector<vector<size_t> > parseBlockSizes(string spec) {
-    vector<vector<size_t> > ns;
-    ns.push_back(vector<size_t>());
-
-    while(size_t pos = spec.find_first_of(" ;,\t")) {
-        ns.back().push_back(stoul(spec.substr(0,pos)));
-        if(pos == string::npos) break;
-        spec.erase(0,pos+1);
-        }
-
-    auto l = ns.back().size();
-    auto nLevels = static_cast<size_t>(log2(l));
-    if(!l || l & (l-1)) { Error("must be power-of-two number of initial blocks"); }
-    
-    while(ns.size() <= nLevels) {
-        auto np = ns.back();
-        ns.push_back(vector<size_t>());
-        for(auto it = np.begin() ; it != np.end() ; it += 2) {
-            size_t sz = *it + *(it+1);
-            ns.back().push_back(sz);
-            }
-        }
-
-    return ns;
-    }
-
-void blockHs(vector<MPO>& Hs , AutoMPO const& H , vector<SiteSet> const& HH , Args const& args) {
-    if(HH.size() == 1lu) Hs.push_back(toMPO(H,args));
-    const auto N = length(H.sites());
-
-    auto offset = 0; 
-    for(const auto& k : HH) {
-        auto n = length(k);
-        AutoMPO Hcur(k);
-        for(const auto& term : H.terms()) {
-            auto mn = N, mx = 1;
-            for(const auto& op : term.ops) {
-                if(op.i > mx) mx = op.i;
-                if(op.i < mn) mn = op.i;
-                }
-            if(mn > offset && mx <= offset+n) {
-                auto tcur = term;
-                for(auto& op : tcur.ops) op.i -= offset;
-                Hcur.add(tcur);
-                }
-            }
-        offset += n;
-        Hs.push_back(toMPO(Hcur,args));
-        }
-
     return;
     }
 
@@ -345,7 +292,7 @@ MPO Trotter(double t , size_t M , AutoMPO const& ampo , double eps) {
     return eH;
     }
 
-void dmrgMPO(MPO const& H , vector<std::pair<double,MPS> >& eigen , int num_sw, Args const& args) {
+void dmrgMPO(MPO const& H , vector<pair<double,MPS> >& eigen , int num_sw, Args const& args) {
     auto do_exclude = args.getBool("Exclude",true);
     auto maxDim = args.getInt("MaxDim",MAX_BOND);
     auto penalty = args.getReal("Penalty",1.0);
@@ -367,105 +314,6 @@ void dmrgMPO(MPO const& H , vector<std::pair<double,MPS> >& eigen , int num_sw, 
         }
 
     return;
-    }
-
-void sliceMPO(MPO const& O, MPOS& res, int ls , size_t D) {
-    const auto N = length(O) , n = length(res) , rs = ls+n-1;
-    if(N == n) { res = MPOS(O); return; }
-    auto sRes = siteInds(res);
-    auto M = O;
-    ITensor S;
-
-    auto args = Args("Cutoff",epx,"RespectDegenerate",true,"LeftTags","Ext,R","RightTags","Ext,L");
-    if(D > 0) args.add("MaxDim",static_cast<int>(D));
-
-    if(ls != 1) {
-        M.position(ls,{"Truncate",false});
-        svd(M(ls-1)*M(ls),M.ref(ls-1),S,M.ref(ls),args);
-        M.ref(ls-1) *= S;
-        M.leftLim(ls-2);
-        M.rightLim(ls);
-        }
- 
-    if(rs != N) {
-        M.position(rs,{"Truncate",false});
-        svd(M(rs)*M(rs+1),M.ref(rs),S,M.ref(rs+1),args);
-        M.ref(rs+1) *= S;
-        M.leftLim(rs);
-        M.rightLim(rs+2);
-        } 
-
-    for(int i : range1(n))
-        res.set(i,M(ls+i-1));
-
-    auto sFull = siteInds(res);
-    res.replaceSiteInds(sFull,sRes);
-    res.replaceSiteInds(prime(sFull),prime(sRes));
-    res.orthogonalize({"Cutoff",epx,"MaxDim",MAX_BOND,"RespectDegenerate",true});
- 
-    return;
-    }
-
-std::pair<ITensor,ITensor> tensorProdContract(MPVS const& psiL, MPVS const& psiR, MPO const& H_in) {
-    const size_t N = length(H_in) , nL = length(psiL) , nR = length(psiR);
-    if(nL + nR != N) Error("tensorProdContract mismatched N");
-    ITensor L,R;
-
-    auto si = unionInds(siteInds(psiL),siteInds(psiR));
-    auto hi = siteInds(H_in);
-    auto H = replaceSiteInds(H_in,hi,si.dag());
-    H = replaceSiteInds(H,hi.prime(),si.prime());
-
-    for(auto i : range1(nL)) {
-        L = L ? L*psiL(i) : psiL(i);
-        L *= H(i);
-        L *= dag(prime(psiL(i)));
-        }
-    L = dag(L);
-    
-    for(auto i : range(nR)) {
-        auto y = N-i , z = nR-i;
-        R = R ? R*psiR(z) : psiR(z);
-        R *= H(y);
-        R *= dag(prime(psiR(z)));
-        }
-    R = dag(R); 
- 
-    return {L,R};
-    }
-
-void tensorProduct(MPVS const& psiL,
-                   MPVS const& psiR,
-                   MPVS& ret,
-                   ITensor const& W,
-                   Args const& args) {
-    const auto N = length(ret) , nL = length(psiL) , nR = length(psiR);
-    const auto ei = uniqueIndex(W,{psiL(nL),psiR(1)},"Ext");
-    const auto cutoff = args.getReal("Cutoff",epx);
-    const auto maxBd = args.getInt("MaxDim",MAX_BOND);
-    const auto move = args.getBool("Move",true);
-    ITensor T,U,S,V;
-
-    for(auto i : range1(nL))
-        ret.set(i,replaceInds(psiL(i),{siteIndex(psiL,i)},{siteIndex(ret,i)}));
-    for(auto i : range1(nR))
-        ret.set(nL+i,replaceInds(psiR(i),{siteIndex(psiR,i)},{siteIndex(ret,nL+i)}));
-    ret.position(nL);
-
-    // Move selection index from middle to edge
-    for(auto i : range(nL)) {
-        auto ai = leftLinkIndex(ret,nL-i);
-        T = i == 0 ? ret(nL-i)*W*ret(nL-i+1) : ret(nL-i)*ret(nL-i+1);
-        U = ITensor(siteIndex(ret,nL-i),ai,ei);
-        //ret.svdBond(nL-i,T,Fromright,{"Cutoff",cutoff,"MaxDim",maxBd,"RespectDegenerate",true,"UseSVD",true});
-        svd(T,U,S,V,{"Cutoff",cutoff,"MaxDim",maxBd,"RespectDegenerate",true});
-        ret.set(nL-i,U*S);
-        ret.set(nL-i+1,V);
-        if(!move) return;
-        }
-
-    ret.orthogonalize({"Cutoff",cutoff,"MaxDim",maxBd,"RespectDegenerate",true});
-    return; 
     }
 
 MPVS
