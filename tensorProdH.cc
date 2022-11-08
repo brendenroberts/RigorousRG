@@ -11,13 +11,10 @@ vector<ITensor> diagTen(tensorProdH const& H , Index si , IndexSet iset , Args c
     if(hasQNs(si)) {
         auto offset = 0;   
         for(auto q : range1(nblock(si))) {
-            auto args2 = args;
-            args2.add("MaxIter",500*blocksize(si,q));
-            
             vector<ITensor> cur;
             for(auto i : range(blocksize(si,q)))
                 cur.push_back(randomITensor(qn(si,q),iset));
-            davidson(H,cur,args2);
+            davidson(H,cur,args);
             std::swap_ranges(cur.begin(),cur.end(),ret.begin()+offset);
             offset += blocksize(si,q);
             }
@@ -42,11 +39,11 @@ void tensorProdH::diag(vector<int> const& localQNs , Args const& args) {
 
     auto ci = get<1>(combiner({ind.first,ind.second},{"Tags","Ext"})) , si = Index();
     if(hasQNs(ci)) {
-        vector<std::pair<QN,long> > siQNs;
+        vector<pair<QN,long> > siQNs;
         for(auto q : range1(nBlocks(ci))) {
             auto qnCur = qn(ci,q);
             auto qnOK = true;
-            for(auto i = 0lu ; i < localQNs.size() ; ++i)
+            for(auto i : args(localQNs))
                 if(-qnCur.val(i+1) > localQNs.at(i)+qnSpread || -qnCur.val(i+1) < localQNs.at(i)-qnSpread) {
                     qnOK = false; break;
                     }
@@ -64,7 +61,7 @@ void tensorProdH::diag(vector<int> const& localQNs , Args const& args) {
         
         auto iset = IndexSet(dag(ind.first),dag(ind.second)); 
 	    auto ret = diagTen(*this,si,iset,args);
-        for(int i : range(dim(si)))
+        for(auto i : range(dim(si)))
             evc += ret.at(i)*setElt(dag(si)=i+1);
         evc.dag();
     } else { // dense matrix diag routine, limited to low dimensional local spaces
