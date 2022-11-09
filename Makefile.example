@@ -33,7 +33,7 @@ rrg_ising: $(ITENSOR_LIBS) $(TENSOR_HEADERS)
 rrg_random_xy: $(ITENSOR_LIBS) $(TENSOR_HEADERS)
 	$(CCCOM) $(CCFLAGS) RandomXY/rrg_random_xy.cc $(CCFILES) -o rrg_random_xy $(LIBFLAGS)
 
-rrg_random_xy: $(ITENSOR_LIBS) $(TENSOR_HEADERS)
+rrg_random_hubbard: $(ITENSOR_LIBS) $(TENSOR_HEADERS)
 	$(CCCOM) $(CCFLAGS) RandomHubbard/rrg_random_hubbard.cc $(CCFILES) -o rrg_random_hubbard $(LIBFLAGS)
 
 clean:
